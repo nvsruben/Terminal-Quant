@@ -5,3 +5,4 @@ numpy
 plotly
 lxml
 html5lib
+requests
