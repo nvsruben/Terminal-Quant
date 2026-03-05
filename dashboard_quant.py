@@ -7,7 +7,7 @@ from datetime import datetime
 import requests
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="Terminal Quantitatif V16 - Institutionnel", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Terminal Quantitatif V16.1", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # 🔒 SYSTÈME DE SÉCURITÉ
@@ -17,7 +17,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.title("🛡️ Terminal Quantitatif Privé")
-    st.markdown("Veuillez vous identifier pour accéder au moteur d'allocation (V16).")
+    st.markdown("Veuillez vous identifier pour accéder au moteur d'allocation.")
     MOT_DE_PASSE_SECRET = "evalyn" 
     mdp_saisi = st.text_input("Mot de passe", type="password")
     if st.button("Déverrouiller le Terminal"):
@@ -32,7 +32,6 @@ if not st.session_state.authentifie:
 # ⚙️ UNIVERS D'INVESTISSEMENT (DICTIONNAIRE COMPLET)
 # ==========================================
 
-# Favoris avec leurs noms précis
 MES_FAVORIS = {
     "Bitcoin": {"ticker": "BTC-EUR", "nom": "Bitcoin (Crypto)"},
     "Ethereum": {"ticker": "ETH-EUR", "nom": "Ethereum (Crypto)"},
@@ -84,7 +83,12 @@ def aspirer_le_marche_sp500():
 
 univers_etudie = MES_FAVORIS.copy()
 mega_dict = aspirer_le_marche_sp500()
-univers_etudie.update(mega_dict)
+
+# PATCH ANTI-PLANTAGE (Filtre les doublons stricts)
+for cle, donnees in mega_dict.items():
+    tickers_actuels = [v["ticker"] for v in univers_etudie.values()]
+    if donnees["ticker"] not in tickers_actuels:
+        univers_etudie[cle] = donnees
 
 @st.cache_data(ttl=3600)
 def telecharger_donnees(liste_tickers):
@@ -109,7 +113,7 @@ def generer_csv_europe(allocations, budget_total, reserve_cash, vix_actuel, taux
 # --- BARRE LATÉRALE & ACTUALISATION TEMPS RÉEL ---
 st.sidebar.title("⚡ Moteur de Données")
 if st.sidebar.button("🔄 Forcer l'actualisation (Temps Réel)"):
-    st.cache_data.clear() # Vide la mémoire pour forcer le téléchargement immédiat
+    st.cache_data.clear()
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -138,7 +142,6 @@ budget_investissable = budget - reserve_cash
 df_hebdo = df_brut.resample('W-FRI').last()
 df_actifs = df_hebdo[liste_tickers_bruts].copy()
 
-# Renommer les colonnes avec les identifiants uniques
 inv_map = {v["ticker"]: k for k, v in univers_etudie.items()}
 df_actifs.rename(columns=inv_map, inplace=True)
 
@@ -162,9 +165,15 @@ correlation = rendements_hebdo.corr()
 actifs_eligibles = []
 raisons = {}
 for actif in univers_etudie.keys():
+    # PATCH ANTI-CRASH (Si Yahoo Finance lâche une action)
+    if actif not in volatilite.index or actif not in max_dd.index:
+        raisons[actif] = "Ignoré (Données inaccessibles sur Yahoo)"
+        continue
+        
     if pd.isna(volatilite[actif]) or pd.isna(max_dd[actif]):
         raisons[actif] = "Données insuffisantes"
         continue
+        
     vol = volatilite[actif]
     dd = max_dd[actif]
     if vol > vol_max: raisons[actif] = f"Rejeté (Vol. > {vol_max*100:.0f}%)"
@@ -207,7 +216,7 @@ if st.sidebar.button("Se déconnecter"):
     st.rerun()
 
 # --- INTERFACE PRINCIPALE ---
-st.title("🛡️ Terminal Quant V16 (Institutionnel)")
+st.title("🛡️ Terminal Quant V16.1 (Institutionnel)")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("VIX (Peur)", f"{vix_actuel:.1f}", delta="Temps Réel", delta_color="normal")
@@ -225,7 +234,6 @@ with tab1:
         statut = "✅ SÉLECTIONNÉ" if actif in top_5_actifs else raisons.get(actif, "Ignoré")
         mnt = allocations[actif] if actif in top_5_actifs else 0.0
         
-        # On récupère le nom précis et le ticker pour affichage
         nom_precis = univers_etudie[actif]["nom"]
         ticker = univers_etudie[actif]["ticker"]
         affichage_tr = f"{nom_precis} ({ticker})"
