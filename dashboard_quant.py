@@ -7,29 +7,29 @@ from datetime import datetime
 import requests
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="Terminal Quantitatif V16.1", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Terminal Quantitatif V17", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 🔒 SYSTÈME DE SÉCURITÉ
+# SYSTÈME D'AUTHENTIFICATION STRICTE
 # ==========================================
 if "authentifie" not in st.session_state:
     st.session_state.authentifie = False
 
 if not st.session_state.authentifie:
-    st.title("🛡️ Terminal Quantitatif Privé")
-    st.markdown("Veuillez vous identifier pour accéder au moteur d'allocation.")
+    st.title("QUANTITATIVE ALLOCATION TERMINAL")
+    st.markdown("AUTHENTIFICATION REQUISE. ACCÈS RESTREINT.")
     MOT_DE_PASSE_SECRET = "evalyn" 
-    mdp_saisi = st.text_input("Mot de passe", type="password")
-    if st.button("Déverrouiller le Terminal"):
+    mdp_saisi = st.text_input("Passkey", type="password")
+    if st.button("INITIALISER LA SESSION"):
         if mdp_saisi == MOT_DE_PASSE_SECRET:
             st.session_state.authentifie = True
             st.rerun()
         else:
-            st.error("Accès refusé.")
+            st.error("ACCÈS REFUSÉ.")
     st.stop()
 
 # ==========================================
-# ⚙️ UNIVERS D'INVESTISSEMENT (DICTIONNAIRE COMPLET)
+# UNIVERS D'INVESTISSEMENT (DICTIONNAIRE COMPLET)
 # ==========================================
 
 MES_FAVORIS = {
@@ -84,7 +84,7 @@ def aspirer_le_marche_sp500():
 univers_etudie = MES_FAVORIS.copy()
 mega_dict = aspirer_le_marche_sp500()
 
-# PATCH ANTI-PLANTAGE (Filtre les doublons stricts)
+# Filtre anti-doublon pour l'univers
 for cle, donnees in mega_dict.items():
     tickers_actuels = [v["ticker"] for v in univers_etudie.values()]
     if donnees["ticker"] not in tickers_actuels:
@@ -99,33 +99,33 @@ def telecharger_donnees(liste_tickers):
 
 def generer_csv_europe(allocations, budget_total, reserve_cash, vix_actuel, taux_fed):
     date_jour = datetime.now().strftime("%d/%m/%Y")
-    en_tetes = "Date;Actif_Achete;Ticker;Nom_Precis;Montant_Alloue_EUR\n"
-    lignes = f"{date_jour};RESERVE CASH TR;-;Trade Republic Cash;{str(round(reserve_cash, 2)).replace('.', ',')}\n"
+    en_tetes = "Date;Instrument;Ticker;Allocation_EUR\n"
+    lignes = f"{date_jour};RESERVE CASH TR;-;{str(round(reserve_cash, 2)).replace('.', ',')}\n"
     
     for actif, montant in allocations.items():
         if montant > 0:
             montant_str = str(round(montant, 2)).replace('.', ',')
             ticker = univers_etudie[actif]["ticker"]
             nom = univers_etudie[actif]["nom"]
-            lignes += f"{date_jour};{actif};{ticker};{nom};{montant_str}\n"
+            lignes += f"{date_jour};{nom};{ticker};{montant_str}\n"
     return (en_tetes + lignes).encode('utf-8-sig')
 
-# --- BARRE LATÉRALE & ACTUALISATION TEMPS RÉEL ---
-st.sidebar.title("⚡ Moteur de Données")
-if st.sidebar.button("🔄 Forcer l'actualisation (Temps Réel)"):
+# --- BARRE LATÉRALE ---
+st.sidebar.title("DATA FEED & SYSTEM")
+if st.sidebar.button("Force Real-Time Refresh"):
     st.cache_data.clear()
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.title("⚙️ Filtres Anti-Bruit (Macro)")
-budget = st.sidebar.number_input("Budget DCA (€)", min_value=10.0, value=950.0, step=10.0)
-seuil_vix = st.sidebar.slider("Seuil Panique VIX (Cash)", 15, 40, 22)
-vol_max = st.sidebar.slider("Rejet : Volatilité Hebdo Max (%)", 30, 150, 60) / 100.0
-dd_max = st.sidebar.slider("Rejet : Max Drawdown mortel (%)", -80, -10, -45) / 100.0
-correl_max = st.sidebar.slider("Filtre Anti-Doublon (%)", 50, 95, 75) / 100.0
+st.sidebar.title("MACRO RISK PARAMETERS")
+budget = st.sidebar.number_input("Capital Allocation (EUR)", min_value=10.0, value=950.0, step=10.0)
+seuil_vix = st.sidebar.slider("VIX Threshold (Cash Trigger)", 15, 40, 22)
+vol_max = st.sidebar.slider("Max Weekly Volatility (%)", 30, 150, 60) / 100.0
+dd_max = st.sidebar.slider("Max Historical Drawdown (%)", -80, -10, -45) / 100.0
+correl_max = st.sidebar.slider("Covariance Rejection Limit (%)", 50, 95, 75) / 100.0
 
 # --- TÉLÉCHARGEMENT MASSIF ---
-with st.spinner(f'📡 Analyse des {len(univers_etudie)} actifs mondiaux en cours...'):
+with st.spinner(f'Processing {len(univers_etudie)} market instruments...'):
     liste_tickers_bruts = [v["ticker"] for k, v in univers_etudie.items()]
     df_brut = telecharger_donnees(liste_tickers_bruts)
 
@@ -165,20 +165,19 @@ correlation = rendements_hebdo.corr()
 actifs_eligibles = []
 raisons = {}
 for actif in univers_etudie.keys():
-    # PATCH ANTI-CRASH (Si Yahoo Finance lâche une action)
     if actif not in volatilite.index or actif not in max_dd.index:
-        raisons[actif] = "Ignoré (Données inaccessibles sur Yahoo)"
+        raisons[actif] = "ERREUR DATA"
         continue
         
     if pd.isna(volatilite[actif]) or pd.isna(max_dd[actif]):
-        raisons[actif] = "Données insuffisantes"
+        raisons[actif] = "DATA INSUFFISANTE"
         continue
         
     vol = volatilite[actif]
     dd = max_dd[actif]
-    if vol > vol_max: raisons[actif] = f"Rejeté (Vol. > {vol_max*100:.0f}%)"
-    elif dd < dd_max: raisons[actif] = f"Rejeté (Max DD < {dd_max*100:.0f}%)"
-    elif pd.isna(sortino[actif]): raisons[actif] = "Données insuffisantes"
+    if vol > vol_max: raisons[actif] = f"REJETÉ (Volatilité > {vol_max*100:.0f}%)"
+    elif dd < dd_max: raisons[actif] = f"REJETÉ (Max DD < {dd_max*100:.0f}%)"
+    elif pd.isna(sortino[actif]): raisons[actif] = "DATA INSUFFISANTE"
     else: actifs_eligibles.append(actif)
 
 sortino_eligibles = sortino[actifs_eligibles].sort_values(ascending=False)
@@ -187,13 +186,13 @@ top_5_actifs = []
 
 for candidat in candidats:
     if len(top_5_actifs) >= 5:
-        raisons[candidat] = "Hors Top 5 Absolu"
+        raisons[candidat] = "FILTRÉ (Hors Top 5)"
         continue
     trop_correle = False
     for selectionne in top_5_actifs:
         if correlation.loc[candidat, selectionne] > correl_max:
             trop_correle = True
-            raisons[candidat] = f"Doublon avec {selectionne}"
+            raisons[candidat] = f"FILTRÉ (Corrélé à {selectionne})"
             break
     if not trop_correle:
         top_5_actifs.append(candidat)
@@ -206,58 +205,65 @@ if len(top_5_actifs) > 0:
 else:
     allocations = pd.Series(dtype=float)
 
-# --- BOUTONS ---
+# --- BOUTONS EXPORT / DÉCONNEXION ---
 st.sidebar.markdown("---")
 if len(top_5_actifs) > 0:
     csv_data = generer_csv_europe(allocations, budget, reserve_cash, vix_actuel, taux_fed_10y)
-    st.sidebar.download_button(label="💾 Exporter Ordre DCA (Excel FR)", data=csv_data, file_name=f"Ordre_DCA_V16.csv", mime="text/csv")
-if st.sidebar.button("Se déconnecter"):
+    st.sidebar.download_button(label="Export Execution Order (CSV)", data=csv_data, file_name=f"Ordre_DCA_V17.csv", mime="text/csv")
+if st.sidebar.button("Terminate Session"):
     st.session_state.authentifie = False
     st.rerun()
 
 # --- INTERFACE PRINCIPALE ---
-st.title("🛡️ Terminal Quant V16.1 (Institutionnel)")
+st.title("QUANTITATIVE ALLOCATION TERMINAL")
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("VIX (Peur)", f"{vix_actuel:.1f}", delta="Temps Réel", delta_color="normal")
-col2.metric("Taux US 10 Ans", f"{taux_fed_10y:.2f}%", delta="Normal", delta_color="normal")
-col3.metric("Univers Scanné", f"{len(univers_etudie)} actifs", delta="S&P 500 Inclus")
-col4.metric("Cash Défensif", f"{reserve_cash:.2f} €", delta=f"{pourcentage_cash*100}% du budget")
+col1.metric("Implied Volatility (VIX)", f"{vix_actuel:.1f}", delta="Risk-Off" if vix_actuel > seuil_vix else "Risk-On", delta_color="inverse")
+col2.metric("US 10Y Treasury Yield", f"{taux_fed_10y:.2f}%", delta="High" if taux_fed_10y > 4.5 else "Stable", delta_color="inverse")
+col3.metric("Processed Universe", f"{len(univers_etudie)} inst.", delta="S&P 500 Enabled")
+col4.metric("Defensive Cash Reserve", f"{reserve_cash:.2f} EUR", delta=f"{pourcentage_cash*100}% exposure")
 
-tab1, tab2, tab3 = st.tabs(["📊 Allocation DCA (Top 50)", "🔗 Matrice Macro", "📈 Backtest (3 Ans)"])
+tab1, tab2, tab3 = st.tabs(["ALLOCATION MATRIX", "COVARIANCE HEATMAP", "HISTORICAL SIMULATION"])
 
 with tab1:
     donnees_tableau = []
     actifs_a_afficher = list(dict.fromkeys(top_5_actifs + candidats[:45])) 
     
     for actif in actifs_a_afficher:
-        statut = "✅ SÉLECTIONNÉ" if actif in top_5_actifs else raisons.get(actif, "Ignoré")
+        statut = "ALLOUÉ" if actif in top_5_actifs else raisons.get(actif, "IGNORÉ")
         mnt = allocations[actif] if actif in top_5_actifs else 0.0
         
+        # Fusion propre et ultra-lisible : Nom Officiel [TICKER]
         nom_precis = univers_etudie[actif]["nom"]
         ticker = univers_etudie[actif]["ticker"]
-        affichage_tr = f"{nom_precis} ({ticker})"
+        instrument_str = f"{nom_precis} [{ticker}]"
         
         donnees_tableau.append({
-            "Actif": actif, "Nom Précis / Ticker (Pour TR)": affichage_tr, "Statut": statut, "Sortino": sortino[actif], 
-            "Max DD (%)": max_dd[actif]*100, "Volatilité (%)": volatilite[actif]*100, "Montant (€)": mnt
+            "Instrument (Ticker)": instrument_str, 
+            "Statut": statut, 
+            "Ratio Sortino": sortino[actif], 
+            "Max Drawdown": max_dd[actif]*100, 
+            "Volatilité": volatilite[actif]*100, 
+            "Allocation (EUR)": mnt
         })
         
-    df_affichage = pd.DataFrame(donnees_tableau).sort_values(by="Montant (€)", ascending=False)
-    st.dataframe(df_affichage.style.format({"Sortino": "{:.2f}", "Max DD (%)": "{:.1f}%", "Volatilité (%)": "{:.1f}%", "Montant (€)": "{:.2f} €"}).applymap(lambda x: 'background-color: #004d00' if x == '✅ SÉLECTIONNÉ' else '', subset=['Statut']), use_container_width=True, height=500)
+    df_affichage = pd.DataFrame(donnees_tableau).sort_values(by="Allocation (EUR)", ascending=False)
+    
+    # Rendu brut (vert foncé institutionnel pour les actifs sélectionnés)
+    st.dataframe(df_affichage.style.format({"Ratio Sortino": "{:.2f}", "Max Drawdown": "{:.1f}%", "Volatilité": "{:.1f}%", "Allocation (EUR)": "{:.2f}"}).applymap(lambda x: 'background-color: #1a4222; color: #ffffff;' if x == 'ALLOUÉ' else '', subset=['Statut']), use_container_width=True, height=500)
 
 with tab2:
     col_pie, col_heat = st.columns(2)
     with col_pie:
-        labels_pie = top_5_actifs + (["Cash (TR)"] if reserve_cash > 0 else [])
+        labels_pie = top_5_actifs + (["Cash EUR"] if reserve_cash > 0 else [])
         valeurs_pie = list(allocations.values) + ([reserve_cash] if reserve_cash > 0 else [])
-        fig_pie = px.pie(names=labels_pie, values=valeurs_pie, hole=0.4, color_discrete_sequence=px.colors.sequential.Teal)
-        fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+        fig_pie = px.pie(names=labels_pie, values=valeurs_pie, hole=0.5, color_discrete_sequence=px.colors.sequential.Greys_r)
+        fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), showlegend=True)
         st.plotly_chart(fig_pie, use_container_width=True)
     with col_heat:
         top_15 = sortino_eligibles.head(15).index.tolist()
         if len(top_15) > 1:
-            fig_heat = px.imshow(correlation.loc[top_15, top_15], text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
+            fig_heat = px.imshow(correlation.loc[top_15, top_15], text_auto=".2f", color_continuous_scale="Greys", zmin=-1, zmax=1)
             st.plotly_chart(fig_heat, use_container_width=True)
 
 with tab3:
@@ -267,5 +273,8 @@ with tab3:
         ret_portefeuille = (rendements_hebdo[top_5_actifs] * poids_backtest.values).sum(axis=1) - (frais / 52)
         croissance_pf = (1 + ret_portefeuille).cumprod() * 100
         croissance_sp = (1 + rendements_hebdo["Core S&P 500"]).cumprod() * 100
-        df_backtest = pd.DataFrame({"Ton Algo (Global)": croissance_pf, "S&P 500": croissance_sp})
-        st.plotly_chart(px.line(df_backtest, labels={"value": "Croissance (Base 100)", "Date": "Date"}), use_container_width=True)
+        df_backtest = pd.DataFrame({"Quant Engine": croissance_pf, "Benchmark S&P 500": croissance_sp})
+        
+        # Graphique sobre (Couleurs neutres)
+        fig_line = px.line(df_backtest, labels={"value": "Growth (Base 100)", "Date": "Date"}, color_discrete_sequence=['#4a90e2', '#6c757d'])
+        st.plotly_chart(fig_line, use_container_width=True)
