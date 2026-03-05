@@ -6,10 +6,10 @@ import plotly.express as px
 from datetime import datetime
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="Terminal Quantitatif V11", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Terminal Quantitatif V12", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 🔒 SYSTÈME DE SÉCURITÉ (LOGIN)
+# 🔒 SYSTÈME DE SÉCURITÉ
 # ==========================================
 if "authentifie" not in st.session_state:
     st.session_state.authentifie = False
@@ -17,23 +17,21 @@ if "authentifie" not in st.session_state:
 if not st.session_state.authentifie:
     st.title("🛡️ Terminal Quantitatif Privé")
     st.markdown("Veuillez vous identifier pour accéder au moteur d'allocation.")
-    
-    # CHANGER LE MOT DE PASSE ICI :
     MOT_DE_PASSE_SECRET = "evalyn" 
-    
     mdp_saisi = st.text_input("Mot de passe", type="password")
     if st.button("Déverrouiller le Terminal"):
         if mdp_saisi == MOT_DE_PASSE_SECRET:
             st.session_state.authentifie = True
-            st.rerun() # Recharge la page en mode déverrouillé
+            st.rerun()
         else:
-            st.error("Accès refusé. Mot de passe incorrect.")
-    st.stop() # Bloque l'exécution de tout le code en dessous si pas connecté
+            st.error("Accès refusé.")
+    st.stop()
 
 # ==========================================
-# ⚙️ LE MOTEUR QUANTITATIF (Une fois connecté)
+# ⚙️ LE MOTEUR QUANTITATIF & MACRO
 # ==========================================
 
+# Tes actifs actuels
 MES_FAVORIS = {
     "Bitcoin": "BTC-EUR", "Ethereum": "ETH-EUR", "Solana": "SOL-EUR",
     "NVIDIA": "NVDA", "Tesla": "TSLA", "Apple": "AAPL", "Alphabet (A)": "GOOGL", "AMD": "AMD", "Palantir": "PLTR",
@@ -46,31 +44,49 @@ MES_FAVORIS = {
     "Cyber Security": "ISPY.L", "Defense USD": "DFNS.L"
 }
 
+# L'univers du Screener (Actifs hors de ta liste pour dénicher de l'Alpha)
+UNIVERS_SCREENER = {
+    "Berkshire Hathaway": "BRK-B", "JPMorgan": "JPM", "Visa": "V", "Eli Lilly": "LLY", 
+    "Novo Nordisk": "NVO", "Broadcom": "AVGO", "S&P 500 Tech ETF": "IUIT.L", 
+    "S&P 500 Health ETF": "IUHC.L", "MSCI India ETF": "NDIA.L", "Obligations US 20+ Yrs": "TLT"
+}
+
 @st.cache_data(ttl=3600)
 def telecharger_donnees():
-    tickers_complets = list(MES_FAVORIS.values()) + ['^VIX']
+    # ^VIX = Peur du marché | ^TNX = Taux à 10 ans de la FED
+    tickers_complets = list(MES_FAVORIS.values()) + list(UNIVERS_SCREENER.values()) + ['^VIX', '^TNX']
     df = yf.download(tickers_complets, period="2y", progress=False)['Close']
     df = df.ffill().bfill()
     return df
 
-# Générateur de fichier CSV Cloud-Native
-def generer_csv(allocations, budget_total, reserve_cash, vix_actuel):
-    date_jour = datetime.now().strftime("%Y-%m-%d %H:%M")
-    en_tetes = "Date,Regime_VIX,Budget_Total,Reserve_Cash,Actif_1,Montant_1,Actif_2,Montant_2,Actif_3,Montant_3,Actif_4,Montant_4,Actif_5,Montant_5\n"
-    ligne = f"{date_jour},{vix_actuel:.1f},{budget_total:.2f},{reserve_cash:.2f}"
+# Générateur CSV spécial Excel Français (Séparateur ; et virgules pour décimales)
+def generer_csv_europe(allocations, budget_total, reserve_cash, vix_actuel, taux_fed):
+    date_jour = datetime.now().strftime("%d/%m/%Y")
+    en_tetes = "Date;Actif_Achete;Montant_Alloue_EUR;Infos_Macro\n"
+    
+    # On remplace les points par des virgules pour Excel France
+    lignes = f"{date_jour};RESERVE CASH TR;{str(round(reserve_cash, 2)).replace('.', ',')};VIX={vix_actuel:.1f} FED={taux_fed:.2f}%\n"
     
     for actif, montant in allocations.items():
         if montant > 0:
-            ligne += f",{actif},{montant:.2f}"
+            montant_str = str(round(montant, 2)).replace('.', ',')
+            lignes += f"{date_jour};{actif};{montant_str};DCA Mensuel\n"
             
-    return (en_tetes + ligne).encode('utf-8')
+    # L'encodage 'utf-8-sig' force Excel à lire correctement les caractères spéciaux (é, è)
+    return (en_tetes + lignes).encode('utf-8-sig')
 
 df_brut = telecharger_donnees()
 vix_actuel = float(df_brut['^VIX'].iloc[-1])
+taux_fed_10y = float(df_brut['^TNX'].iloc[-1]) # Le taux d'intérêt sans risque
 
+# Séparation des données
 df_actifs = df_brut[list(MES_FAVORIS.values())].copy()
 df_actifs.columns = list(MES_FAVORIS.keys())
 
+df_screener = df_brut[list(UNIVERS_SCREENER.values())].copy()
+df_screener.columns = list(UNIVERS_SCREENER.keys())
+
+# --- CALCULS RISK PARITY SUR FAVORIS ---
 rendements = np.log(df_actifs / df_actifs.shift(1)).dropna(how='all')
 volatilite_ewma = rendements.ewm(span=60).std().iloc[-1] * np.sqrt(252)
 
@@ -83,9 +99,9 @@ rendements_cumules = (1 + rendements).cumprod()
 sommet_historique = rendements_cumules.cummax()
 drawdown = (rendements_cumules - sommet_historique) / sommet_historique
 max_dd = drawdown.min()
-
 correlation = rendements.ewm(span=60).corr().loc[rendements.index[-1]]
 
+# --- BARRE LATÉRALE ---
 st.sidebar.title("⚙️ Paramètres de Risque")
 budget = st.sidebar.number_input("Budget DCA (€)", min_value=10.0, value=950.0, step=10.0)
 seuil_vix = st.sidebar.slider("Seuil Panique VIX (Cash)", 15, 40, 20)
@@ -93,17 +109,24 @@ vol_max = st.sidebar.slider("Rejet : Volatilité EWMA Max (%)", 20, 150, 45) / 1
 dd_max = st.sidebar.slider("Rejet : Max Drawdown pire (%)", -80, -10, -35) / 100.0
 correl_max = st.sidebar.slider("Filtre Anti-Doublon (%)", 50, 95, 70) / 100.0
 
-pourcentage_cash = 0.20 if vix_actuel > seuil_vix else 0.0
+# Logique Macro : Si le VIX est haut ET que les taux sont hauts (>4.5%), on augmente le cash à 30%
+if vix_actuel > seuil_vix and taux_fed_10y > 4.5:
+    pourcentage_cash = 0.30
+elif vix_actuel > seuil_vix:
+    pourcentage_cash = 0.20
+else:
+    pourcentage_cash = 0.0
+
 reserve_cash = budget * pourcentage_cash
 budget_investissable = budget - reserve_cash
 
+# Moteur de sélection
 actifs_eligibles = []
 raisons = {}
-
 for actif in MES_FAVORIS.keys():
     vol = volatilite_ewma[actif]
     dd = max_dd[actif]
-    if vol > vol_max: raisons[actif] = f"Rejeté (Volatilité EWMA > {vol_max*100:.0f}%)"
+    if vol > vol_max: raisons[actif] = f"Rejeté (Volatilité > {vol_max*100:.0f}%)"
     elif dd < dd_max: raisons[actif] = f"Rejeté (Max DD < {dd_max*100:.0f}%)"
     elif pd.isna(sortino[actif]): raisons[actif] = "Données insuffisantes"
     else: actifs_eligibles.append(actif)
@@ -133,52 +156,46 @@ if len(top_5_actifs) > 0:
 else:
     allocations = pd.Series(dtype=float)
 
-# --- BOUTON DE TÉLÉCHARGEMENT CLOUD ---
+# --- BOUTONS ---
 if st.sidebar.button("Se déconnecter"):
     st.session_state.authentifie = False
     st.rerun()
 
 st.sidebar.markdown("---")
 if len(top_5_actifs) > 0:
-    csv_data = generer_csv(allocations, budget, reserve_cash, vix_actuel)
+    csv_data = generer_csv_europe(allocations, budget, reserve_cash, vix_actuel, taux_fed_10y)
     date_fichier = datetime.now().strftime("%Y_%m_%d")
     st.sidebar.download_button(
-        label="💾 Télécharger l'Ordre (CSV)",
+        label="💾 Exporter Excel (Format FR)",
         data=csv_data,
-        file_name=f"Ordre_DCA_{date_fichier}.csv",
+        file_name=f"Ordre_DCA_FR_{date_fichier}.csv",
         mime="text/csv"
     )
 
-st.title("🛡️ Hedge Fund Personnel (Moteur EWMA)")
+# --- INTERFACE PRINCIPALE ---
+st.title("🛡️ Terminal Quant & Macro (V12)")
 
-col1, col2, col3 = st.columns(3)
-col1.metric("VIX Actuel", f"{vix_actuel:.1f}", delta="Panique" if vix_actuel > seuil_vix else "Calme", delta_color="inverse")
-col2.metric("Capital Investi", f"{budget_investissable:.2f} €", delta=f"Sélection : {len(top_5_actifs)} actifs")
-col3.metric("Réserve Cash (Trade Republic)", f"{reserve_cash:.2f} €", delta="Sécurité Activée" if reserve_cash > 0 else "")
+# Tableau de bord Macro
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("VIX (Peur)", f"{vix_actuel:.1f}", delta="Panique" if vix_actuel > seuil_vix else "Calme", delta_color="inverse")
+col2.metric("Taux US 10 Ans (FED)", f"{taux_fed_10y:.2f}%", delta="Surchauffe" if taux_fed_10y > 4.5 else "Normal", delta_color="inverse")
+col3.metric("Capital à Investir", f"{budget_investissable:.2f} €")
+col4.metric("Cash Défensif", f"{reserve_cash:.2f} €", delta=f"{pourcentage_cash*100}% du budget")
 
-tab1, tab2, tab3 = st.tabs(["📊 Allocation DCA", "🔗 Matrice & Visuels", "📈 Backtest 2 Ans"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Plan d'Épargne", "🔗 Matrice & Visuels", "📈 Backtest 2 Ans", "🔍 Screener Opportunités"])
 
 with tab1:
     donnees_tableau = []
     for actif in MES_FAVORIS.keys():
-        if actif in top_5_actifs:
-            statut = "✅ SÉLECTIONNÉ"
-            mnt = allocations[actif]
-        else:
-            statut = raisons.get(actif, "Ignoré")
-            mnt = 0.0
-            
+        statut = "✅ SÉLECTIONNÉ" if actif in top_5_actifs else raisons.get(actif, "Ignoré")
+        mnt = allocations[actif] if actif in top_5_actifs else 0.0
         donnees_tableau.append({
             "Actif": actif, "Statut": statut, "Sortino": sortino[actif], 
             "Max DD (%)": max_dd[actif]*100, "Vol. EWMA (%)": volatilite_ewma[actif]*100, 
             "Montant (€)": mnt
         })
-        
     df_affichage = pd.DataFrame(donnees_tableau).sort_values(by="Montant (€)", ascending=False)
-    st.dataframe(df_affichage.style.format({
-        "Sortino": "{:.2f}", "Max DD (%)": "{:.1f}%", "Vol. EWMA (%)": "{:.1f}%", "Montant (€)": "{:.2f} €"
-    }).applymap(lambda x: 'background-color: #004d00' if x == '✅ SÉLECTIONNÉ' else '', subset=['Statut']), 
-    use_container_width=True, height=350)
+    st.dataframe(df_affichage.style.format({"Sortino": "{:.2f}", "Max DD (%)": "{:.1f}%", "Vol. EWMA (%)": "{:.1f}%", "Montant (€)": "{:.2f} €"}).applymap(lambda x: 'background-color: #004d00' if x == '✅ SÉLECTIONNÉ' else '', subset=['Statut']), use_container_width=True, height=350)
 
 with tab2:
     col_pie, col_heat = st.columns(2)
@@ -191,22 +208,34 @@ with tab2:
     with col_heat:
         top_15 = sortino_eligibles.head(15).index.tolist()
         if len(top_15) > 1:
-            corr_reduite = correlation.loc[top_15, top_15]
-            fig_heat = px.imshow(corr_reduite, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
+            fig_heat = px.imshow(correlation.loc[top_15, top_15], text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
             st.plotly_chart(fig_heat, use_container_width=True)
 
 with tab3:
-    st.markdown("Simulation de la Forteresse (Top 5 actuel pondéré EWMA) vs S&P 500 sur 24 mois.")
     if len(top_5_actifs) > 0:
         ret_2y = df_actifs.pct_change().dropna()
         poids_backtest = pd.Series(allocations) / budget_investissable
-        frais_annuels_estimes = (len(top_5_actifs) * 12) / (budget * 12) 
-        ret_portefeuille = (ret_2y[top_5_actifs] * poids_backtest.values).sum(axis=1) - (frais_annuels_estimes / 252)
-        ret_sp500 = ret_2y["Core S&P 500"]
-        
+        frais = (len(top_5_actifs) * 12) / (budget * 12) 
+        ret_portefeuille = (ret_2y[top_5_actifs] * poids_backtest.values).sum(axis=1) - (frais / 252)
         croissance_pf = (1 + ret_portefeuille).cumprod() * 100
-        croissance_sp = (1 + ret_sp500).cumprod() * 100
-        
-        df_backtest = pd.DataFrame({"Portefeuille Quant (Net de frais)": croissance_pf, "S&P 500": croissance_sp})
-        fig_line = px.line(df_backtest, labels={"value": "Croissance (Base 100)", "Date": "Date"})
-        st.plotly_chart(fig_line, use_container_width=True)
+        croissance_sp = (1 + ret_2y["Core S&P 500"]).cumprod() * 100
+        df_backtest = pd.DataFrame({"Ton Algo Quant": croissance_pf, "S&P 500": croissance_sp})
+        st.plotly_chart(px.line(df_backtest, labels={"value": "Croissance (Base 100)", "Date": "Date"}), use_container_width=True)
+
+with tab4:
+    st.subheader("Radar à Alpha (Recherche de nouveaux actifs)")
+    st.markdown("L'algorithme a scanné un univers d'actifs hors de tes favoris pour identifier ceux qui offrent le meilleur rendement ajusté au risque (Sortino) actuellement.")
+    
+    rend_screen = np.log(df_screener / df_screener.shift(1)).dropna(how='all')
+    rend_neg_screen = rend_screen.copy()
+    rend_neg_screen[rend_neg_screen > 0] = 0
+    sortino_screen = (rend_screen.mean() * 252) / (rend_neg_screen.std() * np.sqrt(252))
+    vol_screen = rend_screen.std() * np.sqrt(252)
+    
+    df_resultats_screener = pd.DataFrame({
+        "Ratio Sortino": sortino_screen,
+        "Volatilité": vol_screen * 100
+    }).sort_values(by="Ratio Sortino", ascending=False).head(5)
+    
+    st.dataframe(df_resultats_screener.style.format({"Ratio Sortino": "{:.2f}", "Volatilité": "{:.1f}%"}), use_container_width=True)
+    st.info("💡 Idée : Si un actif ci-dessus a un Sortino supérieur à tes favoris actuels, ajoute-le à ton code !")
