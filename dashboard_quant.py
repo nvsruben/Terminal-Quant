@@ -6,7 +6,7 @@ import plotly.express as px
 from datetime import datetime
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="Terminal Quantitatif V13 - Macro DCA", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Terminal Quantitatif V14 - Global Scanner", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # 🔒 SYSTÈME DE SÉCURITÉ
@@ -16,8 +16,8 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.title("🛡️ Terminal Quantitatif Privé")
-    st.markdown("Veuillez vous identifier pour accéder au moteur d'allocation (Édition Druckenmiller).")
-    MOT_DE_PASSE_SECRET = "evalyn" 
+    st.markdown("Veuillez vous identifier pour accéder au moteur d'allocation.")
+    MOT_DE_PASSE_SECRET = "BTSCG2026" 
     mdp_saisi = st.text_input("Mot de passe", type="password")
     if st.button("Déverrouiller le Terminal"):
         if mdp_saisi == MOT_DE_PASSE_SECRET:
@@ -28,10 +28,9 @@ if not st.session_state.authentifie:
     st.stop()
 
 # ==========================================
-# ⚙️ LE MOTEUR QUANTITATIF (V13 - DRUCKENMILLER)
+# ⚙️ UNIVERS D'INVESTISSEMENT DYNAMIQUE
 # ==========================================
 
-# Ajout des thèmes de Druckenmiller (Japon, Corée, Inde, etc.)
 MES_FAVORIS = {
     "Bitcoin": "BTC-EUR", "Ethereum": "ETH-EUR", "Solana": "SOL-EUR",
     "NVIDIA": "NVDA", "Tesla": "TSLA", "Apple": "AAPL", "Alphabet (A)": "GOOGL", "AMD": "AMD", "Palantir": "PLTR",
@@ -41,20 +40,40 @@ MES_FAVORIS = {
     "Or Physique": "IGLN.L", "Argent Physique": "PHAG.L", "Copper": "CPER", 
     "Uranium USD": "URNM", "Rare Earth": "REMX", "Gold Producers": "GDX", "Copper Miners": "COPX",
     "Core S&P 500": "CSPX.AS", "Core MSCI World": "IWDA.AS", "MSCI EM": "EMIM.L", 
-    "MSCI Japan": "SJPA.L", "MSCI Korea": "CSKR.L", "MSCI India": "NDIA.L", # Nouveautés Macro
+    "MSCI Japan": "SJPA.L", "MSCI Korea": "CSKR.L", "MSCI India": "NDIA.L",
     "Cyber Security": "ISPY.L", "Defense USD": "DFNS.L"
 }
 
-UNIVERS_SCREENER = {
-    "Berkshire Hathaway": "BRK-B", "JPMorgan": "JPM", "Visa": "V", "Eli Lilly": "LLY", 
-    "Novo Nordisk": "NVO", "Broadcom": "AVGO", "S&P 500 Tech ETF": "IUIT.L", 
-    "S&P 500 Health ETF": "IUHC.L", "Obligations US 20+ Yrs": "TLT"
-}
+@st.cache_data(ttl=86400) # Mise en cache 24h pour ne pas spammer Wikipédia
+def obtenir_tickers_sp500():
+    try:
+        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+        table = pd.read_html(url)[0]
+        tickers = table['Symbol'].tolist()
+        # Yahoo Finance utilise un tiret au lieu d'un point pour certaines actions (ex: BRK.B -> BRK-B)
+        tickers = [t.replace('.', '-') for t in tickers]
+        return tickers
+    except Exception as e:
+        return []
+
+# --- BARRE LATÉRALE : SÉLECTION DE L'UNIVERS ---
+st.sidebar.title("🌍 Univers de Recherche")
+st.sidebar.markdown("Élargissez le scan à tout le marché.")
+scanner_sp500 = st.sidebar.checkbox("Activer l'Aspirateur S&P 500 (+500 actions)", value=False, help="Attention: le téléchargement de 500 actions peut prendre 15 à 20 secondes.")
+
+# Construction de l'univers final
+univers_etudie = MES_FAVORIS.copy()
+
+if scanner_sp500:
+    sp500_tickers = obtenir_tickers_sp500()
+    for ticker in sp500_tickers:
+        if ticker not in univers_etudie.values():
+            # Ajoute les nouvelles actions trouvées dans le S&P500
+            univers_etudie[f"S&P500: {ticker}"] = ticker
 
 @st.cache_data(ttl=3600)
-def telecharger_donnees():
-    tickers_complets = list(MES_FAVORIS.values()) + list(UNIVERS_SCREENER.values()) + ['^VIX', '^TNX']
-    # Passage à 3 ANS d'historique (Vision 36 mois)
+def telecharger_donnees(liste_tickers, _univers_dict):
+    tickers_complets = liste_tickers + ['^VIX', '^TNX']
     df = yf.download(tickers_complets, period="3y", progress=False)['Close']
     df = df.ffill().bfill()
     return df
@@ -69,65 +88,61 @@ def generer_csv_europe(allocations, budget_total, reserve_cash, vix_actuel, taux
             lignes += f"{date_jour};{actif};{montant_str};DCA Mensuel\n"
     return (en_tetes + lignes).encode('utf-8-sig')
 
-df_brut = telecharger_donnees()
+# Lancement du téléchargement (avec spinner de patience)
+with st.spinner('📡 Extraction des données quantitatives en cours...'):
+    liste_valeurs = list(univers_etudie.values())
+    df_brut = telecharger_donnees(liste_valeurs, univers_etudie)
 
-# Extraction Macro en direct
 vix_actuel = float(df_brut['^VIX'].iloc[-1])
 taux_fed_10y = float(df_brut['^TNX'].iloc[-1])
 
-# 🚨 L'ARME ANTI-BRUIT : Échantillonnage Hebdomadaire (Vendredi)
-# On force le logiciel à ne regarder que les bougies de fin de semaine
 df_hebdo = df_brut.resample('W-FRI').last()
+df_actifs = df_hebdo[liste_valeurs].copy()
 
-df_actifs = df_hebdo[list(MES_FAVORIS.values())].copy()
-df_actifs.columns = list(MES_FAVORIS.keys())
+# Inversion du dictionnaire pour renommer les colonnes proprement
+inv_map = {v: k for k, v in univers_etudie.items()}
+df_actifs.rename(columns=inv_map, inplace=True)
 
-df_screener = df_hebdo[list(UNIVERS_SCREENER.values())].copy()
-df_screener.columns = list(UNIVERS_SCREENER.keys())
-
-# --- CALCULS LONG TERME (Données Hebdomadaires, annualisées par 52) ---
+# --- CALCULS LONG TERME ---
 rendements_hebdo = np.log(df_actifs / df_actifs.shift(1)).dropna(how='all')
-
-# Volatilité sur 1 an glissant (52 semaines) pour gommer les paniques d'un jour
 volatilite = rendements_hebdo.rolling(window=52).std().iloc[-1] * np.sqrt(52)
 
-# Sortino Ratio (Le vrai, sur 3 ans)
 rendements_negatifs = rendements_hebdo.copy()
 rendements_negatifs[rendements_negatifs > 0] = 0
 downside_vol = rendements_negatifs.std() * np.sqrt(52)
 sortino = (rendements_hebdo.mean() * 52) / downside_vol.replace(0, np.nan)
 
-# Max Drawdown (Sur 3 ans)
 rendements_cumules = (1 + rendements_hebdo).cumprod()
 sommet_historique = rendements_cumules.cummax()
 drawdown = (rendements_cumules - sommet_historique) / sommet_historique
 max_dd = drawdown.min()
 
-# Matrice de Corrélation Hebdomadaire
 correlation = rendements_hebdo.corr()
 
-# --- BARRE LATÉRALE ---
+# --- BARRE LATÉRALE : RISQUE ---
+st.sidebar.markdown("---")
 st.sidebar.title("⚙️ Paramètres de Risque")
-st.sidebar.markdown("*Vision long-terme stabilisée*")
 budget = st.sidebar.number_input("Budget DCA (€)", min_value=10.0, value=950.0, step=10.0)
 seuil_vix = st.sidebar.slider("Seuil Panique VIX (Cash)", 15, 40, 22)
-vol_max = st.sidebar.slider("Rejet : Volatilité Hebdo Max (%)", 30, 150, 60) / 100.0 # Assoupli selon Druckenmiller
+vol_max = st.sidebar.slider("Rejet : Volatilité Hebdo Max (%)", 30, 150, 60) / 100.0
 dd_max = st.sidebar.slider("Rejet : Max Drawdown mortel (%)", -80, -10, -45) / 100.0
 correl_max = st.sidebar.slider("Filtre Anti-Doublon (%)", 50, 95, 75) / 100.0
 
-if vix_actuel > seuil_vix and taux_fed_10y > 4.5:
-    pourcentage_cash = 0.30
-elif vix_actuel > seuil_vix:
-    pourcentage_cash = 0.20
-else:
-    pourcentage_cash = 0.0
+if vix_actuel > seuil_vix and taux_fed_10y > 4.5: pourcentage_cash = 0.30
+elif vix_actuel > seuil_vix: pourcentage_cash = 0.20
+else: pourcentage_cash = 0.0
 
 reserve_cash = budget * pourcentage_cash
 budget_investissable = budget - reserve_cash
 
 actifs_eligibles = []
 raisons = {}
-for actif in MES_FAVORIS.keys():
+for actif in univers_etudie.keys():
+    # Protection contre les actifs sans données (les IPO récentes par ex)
+    if pd.isna(volatilite[actif]) or pd.isna(max_dd[actif]):
+        raisons[actif] = "Données insuffisantes"
+        continue
+        
     vol = volatilite[actif]
     dd = max_dd[actif]
     if vol > vol_max: raisons[actif] = f"Rejeté (Volatilité > {vol_max*100:.0f}%)"
@@ -161,37 +176,33 @@ else:
     allocations = pd.Series(dtype=float)
 
 # --- BOUTONS ---
+st.sidebar.markdown("---")
+if len(top_5_actifs) > 0:
+    csv_data = generer_csv_europe(allocations, budget, reserve_cash, vix_actuel, taux_fed_10y)
+    st.sidebar.download_button(label="💾 Exporter Excel (Format FR)", data=csv_data, file_name=f"Ordre_DCA_FR.csv", mime="text/csv")
 if st.sidebar.button("Se déconnecter"):
     st.session_state.authentifie = False
     st.rerun()
 
-st.sidebar.markdown("---")
-if len(top_5_actifs) > 0:
-    csv_data = generer_csv_europe(allocations, budget, reserve_cash, vix_actuel, taux_fed_10y)
-    date_fichier = datetime.now().strftime("%Y_%m_%d")
-    st.sidebar.download_button(
-        label="💾 Exporter Excel (Format FR)",
-        data=csv_data,
-        file_name=f"Ordre_DCA_FR_{date_fichier}.csv",
-        mime="text/csv"
-    )
-
 # --- INTERFACE PRINCIPALE ---
-st.title("🛡️ Terminal Quant & Macro (V13)")
-st.caption("Méthodologie DCA Hebdomadaire (Inspiré par S. Druckenmiller : Vue 18-36 mois, Filtre Anti-Bruit)")
+st.title("🛡️ Terminal Quant & Macro (V14)")
+st.caption("Aspirateur de Marché activé : Recherche de l'Alpha absolu au-delà des biais de familiarité.")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("VIX (Peur)", f"{vix_actuel:.1f}", delta="Panique" if vix_actuel > seuil_vix else "Calme", delta_color="inverse")
 col2.metric("Taux US 10 Ans", f"{taux_fed_10y:.2f}%", delta="Surchauffe" if taux_fed_10y > 4.5 else "Normal", delta_color="inverse")
-col3.metric("Capital à Investir", f"{budget_investissable:.2f} €")
+col3.metric("Actifs Scannés", f"{len(univers_etudie)} actifs")
 col4.metric("Cash Défensif", f"{reserve_cash:.2f} €", delta=f"{pourcentage_cash*100}% du budget")
 
-tab1, tab2, tab3 = st.tabs(["📊 Plan d'Épargne DCA", "🔗 Matrice Macro", "📈 Backtest (3 Ans)"])
+tab1, tab2, tab3 = st.tabs(["📊 Allocation DCA", "🔗 Matrice Macro", "📈 Backtest (3 Ans)"])
 
 with tab1:
-    st.markdown("**Allocation figée sur la semaine.** Fini le bruit intra-journalier, l'algorithme ne juge que les clôtures du vendredi.")
     donnees_tableau = []
-    for actif in MES_FAVORIS.keys():
+    # On n'affiche que le top 50 pour ne pas surcharger l'écran si le S&P500 est activé
+    actifs_a_afficher = top_5_actifs + candidats[:45]
+    actifs_a_afficher = list(dict.fromkeys(actifs_a_afficher)) # Enlever doublons
+    
+    for actif in actifs_a_afficher:
         statut = "✅ SÉLECTIONNÉ" if actif in top_5_actifs else raisons.get(actif, "Ignoré")
         mnt = allocations[actif] if actif in top_5_actifs else 0.0
         donnees_tableau.append({
@@ -200,7 +211,7 @@ with tab1:
             "Montant (€)": mnt
         })
     df_affichage = pd.DataFrame(donnees_tableau).sort_values(by="Montant (€)", ascending=False)
-    st.dataframe(df_affichage.style.format({"Sortino (3y)": "{:.2f}", "Max DD (%)": "{:.1f}%", "Volatilité (%)": "{:.1f}%", "Montant (€)": "{:.2f} €"}).applymap(lambda x: 'background-color: #004d00' if x == '✅ SÉLECTIONNÉ' else '', subset=['Statut']), use_container_width=True, height=350)
+    st.dataframe(df_affichage.style.format({"Sortino (3y)": "{:.2f}", "Max DD (%)": "{:.1f}%", "Volatilité (%)": "{:.1f}%", "Montant (€)": "{:.2f} €"}).applymap(lambda x: 'background-color: #004d00' if x == '✅ SÉLECTIONNÉ' else '', subset=['Statut']), use_container_width=True, height=400)
 
 with tab2:
     col_pie, col_heat = st.columns(2)
@@ -223,5 +234,5 @@ with tab3:
         ret_portefeuille = (rendements_hebdo[top_5_actifs] * poids_backtest.values).sum(axis=1) - (frais / 52)
         croissance_pf = (1 + ret_portefeuille).cumprod() * 100
         croissance_sp = (1 + rendements_hebdo["Core S&P 500"]).cumprod() * 100
-        df_backtest = pd.DataFrame({"Ton DCA Quant": croissance_pf, "S&P 500": croissance_sp})
+        df_backtest = pd.DataFrame({"Ton Algo (Global Scanner)": croissance_pf, "S&P 500": croissance_sp})
         st.plotly_chart(px.line(df_backtest, labels={"value": "Croissance (Base 100)", "Date": "Date"}), use_container_width=True)
