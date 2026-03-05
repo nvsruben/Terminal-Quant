@@ -17,7 +17,7 @@ if "authentifie" not in st.session_state:
 if not st.session_state.authentifie:
     st.title("🛡️ Terminal Quantitatif Privé")
     st.markdown("Veuillez vous identifier pour accéder au moteur d'allocation.")
-    MOT_DE_PASSE_SECRET = "BTSCG2026" 
+    MOT_DE_PASSE_SECRET = "evalyn" 
     mdp_saisi = st.text_input("Mot de passe", type="password")
     if st.button("Déverrouiller le Terminal"):
         if mdp_saisi == MOT_DE_PASSE_SECRET:
