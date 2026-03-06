@@ -95,7 +95,7 @@ def telecharger_donnees(liste_tickers):
 def analyser_sentiment_nlp():
     try:
         analyzer = SentimentIntensityAnalyzer()
-        tickers_macro = ['^GSPC', 'TLT', 'GLD'] # S&P500, Bonds, Gold
+        tickers_macro = ['^GSPC', 'TLT', 'GLD'] 
         toutes_les_news = []
         
         for t in tickers_macro:
@@ -105,17 +105,15 @@ def analyser_sentiment_nlp():
         if not toutes_les_news:
             return 0.0, pd.DataFrame()
             
-        # Tri des news par date (plus récentes d'abord)
         toutes_les_news = sorted(toutes_les_news, key=lambda x: x.get('providerPublishTime', 0), reverse=True)[:20]
         
         lignes_news = []
         scores_vader = []
         for item in toutes_les_news:
             titre = item.get('title', '')
-            score = analyzer.polarity_scores(titre)['compound'] # Score global de -1 à 1
+            score = analyzer.polarity_scores(titre)['compound'] 
             scores_vader.append(score)
             
-            # Formatage de l'heure
             timestamp = item.get('providerPublishTime', 0)
             date_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M') if timestamp > 0 else "N/A"
             
@@ -152,6 +150,7 @@ if st.sidebar.button("FORCE REAL-TIME REFRESH", use_container_width=True):
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='font-family: monospace;'>PORTFOLIO LIMITS</h3>", unsafe_allow_html=True)
 budget = st.sidebar.number_input("Total Capital (EUR)", min_value=10.0, value=950.0, step=10.0)
+seuil_vix = st.sidebar.slider("VIX Threshold", 15, 40, 22) # CORRECTIF : Remis en place !
 target_volatility = st.sidebar.slider("Target Annual Volatility (%)", 5, 25, 12) / 100.0
 min_trade_size = st.sidebar.slider("Minimum Trade Size (EUR)", 10, 100, 50)
 turnover_penalty = st.sidebar.slider("Hurdle Rate (Turnover Penalty %)", 5, 30, 15) / 100.0
@@ -499,7 +498,6 @@ with tab2:
 with tab3:
     st.markdown("<h4 style='font-family: monospace;'>ALTERNATIVE DATA & MACRO MONITORS</h4>", unsafe_allow_html=True)
     
-    # NLP Dataframe Display
     if not df_headlines.empty:
         st.markdown("**Real-Time Natural Language Processing (News Sentiment)**")
         st.write("Le moteur VADER analyse les derniers titres financiers mondiaux pour détecter la panique ou l'euphorie.")
