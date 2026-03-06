@@ -1178,13 +1178,13 @@ with tab1:
                 pru = float(dict_pru.get(a, val_actuelle))
                 delta = val_cible - val_actuelle
                 pnl = val_actuelle - pru
-                flat_tax_hit = max(0, pnl) * FLAT_TAX_FR if delta < 0 else 0.0
 
                 atr_info = atr_data.get(a, {})
                 stop_hit = atr_info.get("stop_touche", False)
+                est_verrouille = a in actifs_verrouilles
 
-                frais = FRAIS_ORDRE_TR + abs(delta) * SPREAD_ESTIME_TR
-                if stop_hit and val_actuelle > 0:
+                # ATR Stop : JAMAIS sur les positions verrouillées (Cœur)
+                if stop_hit and val_actuelle > 0 and not est_verrouille:
                     action = "VENDRE [STOP]"
                     delta = -val_actuelle
                 elif abs(delta) < min_trade_size:
@@ -1193,6 +1193,10 @@ with tab1:
                     action = "ACHETER"
                 else:
                     action = "VENDRE"
+
+                # Recalculer frais et impact fiscal APRÈS détermination du delta final
+                frais = FRAIS_ORDRE_TR + abs(delta) * SPREAD_ESTIME_TR if action != "CONSERVER" else 0.0
+                flat_tax_hit = max(0, pnl) * FLAT_TAX_FR if "VENDRE" in action else 0.0
 
                 if abs(delta) > 0.01:
                     lignes_ordres.append({
