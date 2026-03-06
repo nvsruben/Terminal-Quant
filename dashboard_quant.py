@@ -10,12 +10,13 @@ from scipy.linalg import inv
 from sklearn.covariance import ledoit_wolf
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import warnings
 
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="QUANTITATIVE TERMINAL V27", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="QUANTITATIVE TERMINAL V28", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # SYSTEM AUTHENTICATION
@@ -25,7 +26,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.markdown("<h1 style='text-align: center; color: #ffffff; font-family: monospace;'>QUANTITATIVE ALLOCATION DESK</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V27 (DEEP MEMORY & TEAR SHEET).</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V28 (NLP SENTIMENT ENGINE).</p>", unsafe_allow_html=True)
     
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
     with col_login2:
@@ -40,7 +41,7 @@ if not st.session_state.authentifie:
     st.stop()
 
 # ==========================================
-# INVESTMENT UNIVERSE
+# INVESTMENT UNIVERSE & NLP ENGINE
 # ==========================================
 MES_FAVORIS = {
     "Bitcoin": {"ticker": "BTC-EUR", "nom": "Bitcoin (Crypto)"},
@@ -86,10 +87,48 @@ for cle, donnees in mega_dict.items():
 @st.cache_data(ttl=3600)
 def telecharger_donnees(liste_tickers):
     tickers_complets = liste_tickers + ['^VIX', '^TNX', '^GSPC', '^IRX', 'HYG', 'IEF', 'GLD']
-    # V27 FIX: Passage à 10 ans pour garantir l'historique de tous les stress-tests
     df = yf.download(tickers_complets, period="10y", progress=False)['Close']
     df = df.ffill().bfill()
     return df
+
+@st.cache_data(ttl=3600)
+def analyser_sentiment_nlp():
+    try:
+        analyzer = SentimentIntensityAnalyzer()
+        tickers_macro = ['^GSPC', 'TLT', 'GLD'] # S&P500, Bonds, Gold
+        toutes_les_news = []
+        
+        for t in tickers_macro:
+            news = yf.Ticker(t).news
+            if news: toutes_les_news.extend(news)
+            
+        if not toutes_les_news:
+            return 0.0, pd.DataFrame()
+            
+        # Tri des news par date (plus récentes d'abord)
+        toutes_les_news = sorted(toutes_les_news, key=lambda x: x.get('providerPublishTime', 0), reverse=True)[:20]
+        
+        lignes_news = []
+        scores_vader = []
+        for item in toutes_les_news:
+            titre = item.get('title', '')
+            score = analyzer.polarity_scores(titre)['compound'] # Score global de -1 à 1
+            scores_vader.append(score)
+            
+            # Formatage de l'heure
+            timestamp = item.get('providerPublishTime', 0)
+            date_str = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M') if timestamp > 0 else "N/A"
+            
+            lignes_news.append({
+                "Date": date_str,
+                "Headline": titre,
+                "VADER Score": score
+            })
+            
+        sentiment_moyen = np.mean(scores_vader)
+        return sentiment_moyen, pd.DataFrame(lignes_news)
+    except Exception as e:
+        return 0.0, pd.DataFrame()
 
 def generer_csv_europe(df_ordres):
     date_jour = datetime.now().strftime("%d/%m/%Y")
@@ -119,7 +158,7 @@ turnover_penalty = st.sidebar.slider("Hurdle Rate (Turnover Penalty %)", 5, 30, 
 correl_max = st.sidebar.slider("Base Covariance Limit (%)", 50, 95, 75) / 100.0
 max_weight_limit = 0.25
 
-# --- INIT PORTFOLIO STATE (CORE-SATELLITE) ---
+# --- INIT PORTFOLIO STATE ---
 if 'mon_portefeuille' not in st.session_state:
     st.session_state.mon_portefeuille = pd.DataFrame({
         "Actif": ["Core S&P 500", "Bitcoin", "Or Physique", "Palantir", "Argent Physique", "Uranium USD", "Rheinmetall"],
@@ -128,11 +167,12 @@ if 'mon_portefeuille' not in st.session_state:
     })
 
 # --- CORE ENGINE EXECUTION ---
-with st.spinner(f'Deep Memory Active. Processing {len(univers_etudie)} instruments over 10 Years...'):
+with st.spinner(f'Executing Alternative Data Models (NLP & K-Means)...'):
     liste_tickers_bruts = [v["ticker"] for k, v in univers_etudie.items()]
     df_brut = telecharger_donnees(liste_tickers_bruts)
+    avg_nlp_score, df_headlines = analyser_sentiment_nlp()
 
-# --- 1. AI REGIME DETECTION (K-MEANS) ---
+# --- 1. AI REGIME & MACRO DETECTION ---
 df_ml = pd.DataFrame({
     'VIX': df_brut['^VIX'],
     'Yield_Spread': df_brut['^TNX'] - df_brut['^IRX'],
@@ -150,22 +190,36 @@ bull_cluster = cluster_vix_means.idxmin()
 bear_cluster = cluster_vix_means.idxmax()
 current_cluster = kmeans.predict(scaled_data[-1].reshape(1, -1))[0]
 
-if current_cluster == bear_cluster:
-    regime_marche = "BEAR REGIME (AI DETECTED)"
+# Initialisation du Risk Score via le NLP
+risk_score = 0
+if avg_nlp_score < -0.15: risk_score += 20 # Malus Panique Médiatique
+elif avg_nlp_score > 0.15: risk_score -= 10 # Bonus Euphorie
+
+vix_actuel = float(df_brut['^VIX'].iloc[-1])
+sp500_close = float(df_brut['^GSPC'].iloc[-1])
+sp500_sma200 = float(df_brut['^GSPC'].tail(200).mean())
+if sp500_close < sp500_sma200: risk_score += 40
+if float(df_brut['^TNX'].iloc[-1]) - float(df_brut['^IRX'].iloc[-1]) < 0.0: risk_score += 30
+if float(df_brut['HYG'].iloc[-1]/df_brut['IEF'].iloc[-1]) < float((df_brut['HYG']/df_brut['IEF']).tail(50).mean()): risk_score += 30
+if vix_actuel > seuil_vix: risk_score += 20
+
+risk_score = max(0, min(100, risk_score)) # Bloquer entre 0 et 100
+
+if risk_score >= 70 or current_cluster == bear_cluster:
+    regime_marche = "CRITICAL BEAR (AI & NLP)"
     tail_hedge_active = True
-elif current_cluster == bull_cluster:
-    regime_marche = "BULL REGIME (AI DETECTED)"
+elif risk_score >= 40:
+    regime_marche = "DEFENSIVE REGIME"
     tail_hedge_active = False
 else:
-    regime_marche = "VOLATILE REGIME (AI DETECTED)"
+    regime_marche = "BULL REGIME"
     tail_hedge_active = False
 
-# ADAPTIVE COVARIANCE LOGIC (V27)
 dynamic_correl_max = correl_max
-if tail_hedge_active or "VOLATILE" in regime_marche:
-    dynamic_correl_max = min(correl_max, 0.55) # Force extreme diversification during stress
+if tail_hedge_active or risk_score >= 40:
+    dynamic_correl_max = min(correl_max, 0.55) 
 
-# --- DATA PREPARATION (3 Years for Momentum/Calculations) ---
+# --- DATA PREPARATION ---
 df_hebdo = df_brut.tail(252*3).resample('W-FRI').last() 
 df_actifs = df_hebdo[liste_tickers_bruts].copy()
 inv_map = {v["ticker"]: k for k, v in univers_etudie.items()}
@@ -252,7 +306,6 @@ for candidat in actifs_eligibles_finaux:
     if len(top_5_actifs) >= 5: break
     trop_correle = False
     for selectionne in top_5_actifs:
-        # V27: Adaptive correlation check
         if correlation.loc[candidat, selectionne] > dynamic_correl_max:
             trop_correle = True
             raisons[candidat] = f"FILTERED (Adaptive Covariance w/ {selectionne})"
@@ -341,15 +394,25 @@ if tail_hedge_active:
     allocations["US Treasuries 20Y+"] = allocations.get("US Treasuries 20Y+", 0.0) + budget_tail_risk
 
 # --- MAIN DASHBOARD ---
-st.markdown("<h2 style='font-family: monospace; border-bottom: 1px solid #444; padding-bottom: 10px;'>PRIME BROKER DESK (CORE-SATELLITE)</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='font-family: monospace; border-bottom: 1px solid #444; padding-bottom: 10px;'>PRIME BROKER DESK (NLP + AI)</h2>", unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("AI MARKET REGIME", regime_marche, delta="K-Means", delta_color="normal" if "BULL" in regime_marche else "inverse")
-col2.metric("STRATEGIC CORE", f"{capital_verrouille:.2f} EUR", delta="Locked Assets", delta_color="off")
+col1.metric("SYSTEMIC RISK SCORE", f"{risk_score}/100", delta=regime_marche, delta_color="normal" if risk_score < 40 else "inverse")
+
+sentiment_label = "Neutral"
+sentiment_color = "off"
+if avg_nlp_score > 0.15: 
+    sentiment_label = "Euphoria"
+    sentiment_color = "normal"
+elif avg_nlp_score < -0.15: 
+    sentiment_label = "Fear/Panic"
+    sentiment_color = "inverse"
+
+col2.metric("NLP NEWS SENTIMENT", f"{avg_nlp_score:.2f}", delta=sentiment_label, delta_color=sentiment_color)
 col3.metric("TACTICAL SATELLITE", f"{budget_satellite:.2f} EUR", delta=f"Covariance Limit: {dynamic_correl_max*100:.0f}%", delta_color="normal")
 col4.metric("VOL-TARGETED CASH", f"{reserve_cash:.2f} EUR", delta=f"{(reserve_cash/budget)*100:.1f}% dynamic weight", delta_color="off")
 
-tab1, tab2, tab3, tab4 = st.tabs(["ORDER MANAGEMENT SYSTEM (OMS)", "TARGET ALLOCATION MATRIX", "FACTOR EXPOSURE", "HISTORICAL STRESS TESTS"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["ORDER MANAGEMENT SYSTEM (OMS)", "TARGET ALLOCATION MATRIX", "MACRO & NLP SENTIMENT", "FACTOR EXPOSURE", "HISTORICAL STRESS TESTS"])
 
 with tab1:
     st.markdown("<h4 style='font-family: monospace;'>SMART ORDER MANAGEMENT SYSTEM</h4>", unsafe_allow_html=True)
@@ -396,7 +459,6 @@ with tab1:
                 st.success("✅ Portefeuille aligné. Aucun ordre majeur requis.")
 
 with tab2:
-    # --- TEAR SHEET KPIs ---
     st.markdown("<div style='background-color: #1e1e1e; padding: 15px; border-radius: 5px; margin-bottom: 20px;'>", unsafe_allow_html=True)
     col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
     expected_sharpe = expected_portfolio_return / port_vol_initial if port_vol_initial > 0 else 0
@@ -435,6 +497,36 @@ with tab2:
     st.dataframe(df_affichage.style.format({"Target Capital": "{:.2f} €"}).applymap(styler_status, subset=['Status']), use_container_width=True, height=450)
 
 with tab3:
+    st.markdown("<h4 style='font-family: monospace;'>ALTERNATIVE DATA & MACRO MONITORS</h4>", unsafe_allow_html=True)
+    
+    # NLP Dataframe Display
+    if not df_headlines.empty:
+        st.markdown("**Real-Time Natural Language Processing (News Sentiment)**")
+        st.write("Le moteur VADER analyse les derniers titres financiers mondiaux pour détecter la panique ou l'euphorie.")
+        
+        def styler_vader(val):
+            if isinstance(val, float):
+                if val > 0.15: return 'color: #00cc00;'
+                elif val < -0.15: return 'color: #ff4b4b;'
+            return 'color: #888888;'
+            
+        st.dataframe(df_headlines.style.applymap(styler_vader, subset=['VADER Score']).format({"VADER Score": "{:.2f}"}), use_container_width=True, height=250)
+    else:
+        st.info("Aucune actualité macroéconomique détectée dans l'heure.")
+
+    st.markdown("---")
+    
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.markdown("<span style='color: #888;'>Yield Curve (10Y - 3M Spread)</span>", unsafe_allow_html=True)
+        df_yield = pd.DataFrame({"Spread (%)": (df_brut['^TNX'] - df_brut['^IRX']).tail(252)})
+        st.line_chart(df_yield, color="#8b0000" if curve_inverted else "#4a90e2")
+    with col_m2:
+        st.markdown("<span style='color: #888;'>Interbank Credit Stress (HYG/IEF)</span>", unsafe_allow_html=True)
+        df_credit = pd.DataFrame({"Ratio": df_brut['Credit_Spread'].tail(252)})
+        st.line_chart(df_credit, color="#8b0000" if credit_stress else "#4a90e2")
+
+with tab4:
     betas = {"Equity Beta (GSPC)": 0.0, "Duration Beta (IEF)": 0.0, "Commodity Beta (GLD)": 0.0}
     if len(allocations) > 0:
         ret_market = df_brut['^GSPC'].pct_change().dropna()
@@ -459,14 +551,13 @@ with tab3:
         fig_bar.update_layout(template="plotly_dark", margin=dict(t=0, b=0, l=0, r=0))
         st.plotly_chart(fig_bar, use_container_width=True)
 
-with tab4:
+with tab5:
     if len(allocations) > 0:
         poids_test = (pd.Series(allocations) / budget).fillna(0)
         actifs_testes = poids_test[poids_test > 0].index.tolist()
         if len(actifs_testes) > 0:
             df_history = df_brut.copy()
             
-            # STRESS TEST 1: COVID (NOW WITH 10Y DATA, IT WILL NOT FAIL)
             df_covid_brut = df_history.loc['2020-02-15':'2020-04-30']
             actifs_valides_covid = [a for a in actifs_testes if df_covid_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
             poids_covid = poids_test[actifs_valides_covid]
