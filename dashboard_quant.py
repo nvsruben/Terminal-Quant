@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="TERMINAL QUANTITATIF V32", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="TERMINAL QUANTITATIF V33", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # CONSTANTES TRADE REPUBLIC
@@ -47,7 +47,7 @@ if not st.session_state.authentifie:
     )
     st.markdown(
         "<p style='text-align: center; color: #888888; font-family: monospace;'>"
-        "ACCÈS RESTREINT. V32 — MODE DCA · TRADE REPUBLIC.</p>",
+        "ACCÈS RESTREINT. V33 — MODE DCA · TRADE REPUBLIC.</p>",
         unsafe_allow_html=True,
     )
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
@@ -245,7 +245,7 @@ if st.sidebar.button("FORCER L'ACTUALISATION EN DIRECT", use_container_width=Tru
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='font-family: monospace;'>PARAMÈTRES DU PORTEFEUILLE</h3>", unsafe_allow_html=True)
 
-# [V32] Le capital est calculé automatiquement depuis les positions
+# [V33] Le capital est calculé automatiquement depuis les positions
 st.sidebar.markdown("*Le capital est calculé depuis vos positions.*")
 
 seuil_vix = st.sidebar.slider("Seuil d'Alerte VIX (Panique)", 15, 40, 22)
@@ -256,7 +256,7 @@ turnover_penalty = st.sidebar.slider("Pénalité de Rotation (%)", 5, 30, 15) / 
 correl_max = st.sidebar.slider("Limite de Corrélation Max (%)", 50, 95, 75) / 100.0
 max_weight_limit = 0.25
 
-# [V32] Validation du portefeuille AVANT tout calcul (fixe le bug V31)
+# [V33] Validation du portefeuille AVANT tout calcul (fixe le bug V31)
 df_port = st.session_state.mon_portefeuille.copy()
 df_port = df_port.dropna(subset=["Actif"])
 df_port = df_port[df_port["Actif"].isin(univers_etudie.keys())]
@@ -344,7 +344,13 @@ else:
     regime_marche = "RÉGIME HAUSSIER"
     tail_hedge_active = False
 
-dynamic_correl_max = min(correl_max, 0.55) if tail_hedge_active or risk_score >= 40 else correl_max
+# En mode défensif on resserre la corrélation mais pas au point de tout rejeter
+if tail_hedge_active:
+    dynamic_correl_max = min(correl_max, 0.60)
+elif risk_score >= 40:
+    dynamic_correl_max = min(correl_max, 0.70)
+else:
+    dynamic_correl_max = correl_max
 
 
 # ==========================================
@@ -367,7 +373,9 @@ sortino_brut = (rendements_hebdo.mean() * 52) / (
 rendements_cumules = (1 + rendements_hebdo).cumprod()
 max_dd = ((rendements_cumules - rendements_cumules.cummax()) / rendements_cumules.cummax()).min()
 
-rendements_propres = rendements_hebdo.dropna()
+# Garder les colonnes avec assez de données (au moins 80% de valeurs)
+rendements_propres = rendements_hebdo.dropna(axis=1, thresh=int(len(rendements_hebdo) * 0.8))
+rendements_propres = rendements_propres.dropna(axis=0)
 if rendements_propres.shape[0] > 10 and rendements_propres.shape[1] > 1:
     lw_cov_brut, shrinkage_penalty = ledoit_wolf(rendements_propres)
     correlation = pd.DataFrame(lw_cov_brut, index=rendements_propres.columns, columns=rendements_propres.columns).corr()
@@ -491,20 +499,24 @@ if not df_zscore.empty:
 else:
     actifs_eligibles_finaux = []
 
-top_5_actifs = []
+# Nombre max d'actifs satellite adapté au budget disponible
+# Avec min_trade_size de 50€, on ne peut pas avoir plus d'actifs que budget/min_trade_size
+max_satellite_actifs = max(1, min(8, int(budget_satellite / min_trade_size))) if budget_satellite > 0 else 0
+
+top_satellite_actifs = []
 for candidat in actifs_eligibles_finaux:
-    if len(top_5_actifs) >= 5:
+    if len(top_satellite_actifs) >= max_satellite_actifs:
         break
     if candidat not in correlation.index:
         continue
     trop_correle = False
-    for s in top_5_actifs:
+    for s in top_satellite_actifs:
         if s in correlation.index and candidat in correlation.columns:
             if abs(correlation.loc[candidat, s]) > dynamic_correl_max:
                 trop_correle = True
                 break
     if not trop_correle:
-        top_5_actifs.append(candidat)
+        top_satellite_actifs.append(candidat)
 
 
 # ==========================================
@@ -523,81 +535,120 @@ budget_satellite = max(0, budget - capital_verrouille)
 port_vol_initial = 0.0
 expected_portfolio_return = 0.0
 allocations_satellite = pd.Series(dtype=float)
-reserve_cash_pct = 0.0
 budget_tail_risk = 0
 
-if len(top_5_actifs) > 0 and budget_satellite > 0:
-    actifs_bl = [a for a in top_5_actifs if a in rendements_propres.columns]
+# Cash minimum obligatoire selon le régime de marché
+if tail_hedge_active or risk_score >= 70:
+    min_cash_pct = 0.15  # 15% en cash minimum si krach
+elif risk_score >= 40:
+    min_cash_pct = 0.05  # 5% minimum en défensif
+else:
+    min_cash_pct = 0.0   # 0% en haussier
+
+reserve_cash_pct = min_cash_pct
+
+if len(top_satellite_actifs) > 0 and budget_satellite > 0:
+    actifs_bl = [a for a in top_satellite_actifs if a in rendements_propres.columns]
     if len(actifs_bl) > 0:
         rendements_top5 = rendements_propres[actifs_bl]
-        try:
-            lw_cov_top5, _ = ledoit_wolf(rendements_top5)
-            cov_matrix_normal = lw_cov_top5 * 52
-
-            # Covariance sous stress
-            jours_krach = df_brut["^GSPC"].pct_change().dropna() < -0.01
-            idx_crash = jours_krach[jours_krach].index.intersection(rendements_propres.index)
-            if len(idx_crash) > 10:
-                cov_crash = rendements_propres.loc[idx_crash, actifs_bl].cov().values * 52
-                if cov_crash.shape == cov_matrix_normal.shape:
-                    cov_matrix = 0.7 * cov_matrix_normal + 0.3 * cov_crash
-                else:
-                    cov_matrix = cov_matrix_normal
-            else:
-                cov_matrix = cov_matrix_normal
-
-            n_a = len(actifs_bl)
-            inv_vol_bl = 1.0 / np.clip(volatilite[actifs_bl].values, 0.01, None)
-            w_eq = inv_vol_bl / inv_vol_bl.sum()
-            Pi = 2.5 * np.dot(cov_matrix, w_eq)
-
-            # Vues ML avec confiance calibrée
-            Q = np.array([ml_predictions.get(a, 0.0) * 52 for a in actifs_bl])
-            omega_diag = [max(abs(ml_cv_scores.get(a, -0.01)) * 52, 0.01) for a in actifs_bl]
-            Omega = np.diag(omega_diag)
-            P = np.eye(n_a)
-            tau = 0.05
-
-            term1 = inv(inv(tau * cov_matrix) + P.T @ inv(Omega) @ P)
-            term2 = inv(tau * cov_matrix) @ Pi + P.T @ inv(Omega) @ Q
-            BL_returns = term1 @ term2
-
-            poids_optimaux = np.clip(inv(cov_matrix) @ BL_returns, 0, None)
-            if poids_optimaux.sum() > 0:
-                poids_optimaux = poids_optimaux / poids_optimaux.sum()
-            else:
-                poids_optimaux = w_eq
-
-            # Plafonner les poids
-            for _ in range(10):
-                if not any(poids_optimaux > max_weight_limit + 1e-5):
-                    break
-                excess = (poids_optimaux[poids_optimaux > max_weight_limit] - max_weight_limit).sum()
-                poids_optimaux[poids_optimaux > max_weight_limit] = max_weight_limit
-                mask = poids_optimaux < max_weight_limit
-                if mask.sum() > 0:
-                    poids_optimaux[mask] += excess * (poids_optimaux[mask] / poids_optimaux[mask].sum())
-                else:
-                    break
-
-            port_vol_initial = float(np.sqrt(poids_optimaux.T @ cov_matrix @ poids_optimaux))
-            ret_annuel = rendements_hebdo[actifs_bl].mean() * 52
-            expected_portfolio_return = float(np.dot(poids_optimaux, ret_annuel.values))
-            if np.isnan(expected_portfolio_return):
-                expected_portfolio_return = 0.0
-
-            exposure_factor = min(1.0, target_volatility / port_vol_initial if port_vol_initial > 0 else 1.0)
-            reserve_cash_pct = 1.0 - exposure_factor
-            budget_invest = budget_satellite * exposure_factor
-
+        
+        # Cas spécial : 1 seul actif satellite → pas besoin de BL
+        if len(actifs_bl) == 1:
+            budget_invest = budget_satellite * (1.0 - reserve_cash_pct)
             if tail_hedge_active:
                 budget_tail_risk = budget_invest * 0.30
                 budget_invest -= budget_tail_risk
+            allocations_satellite = pd.Series({actifs_bl[0]: budget_invest})
+            ret_a = rendements_top5.mean().values[0] * 52
+            vol_a = rendements_top5.std().values[0] * np.sqrt(52)
+            expected_portfolio_return = float(ret_a) if not np.isnan(ret_a) else 0.0
+            port_vol_initial = float(vol_a) if not np.isnan(vol_a) else 0.0
+        
+        # Cas normal : 2+ actifs → Black-Litterman complet
+        elif len(actifs_bl) >= 2:
+            try:
+                lw_cov_top5, _ = ledoit_wolf(rendements_top5)
+                cov_matrix_normal = lw_cov_top5 * 52
 
-            allocations_satellite = pd.Series(poids_optimaux * budget_invest, index=actifs_bl)
+                # Covariance sous stress
+                jours_krach = df_brut["^GSPC"].pct_change().dropna() < -0.01
+                idx_crash = jours_krach[jours_krach].index.intersection(rendements_propres.index)
+                if len(idx_crash) > 10:
+                    cov_crash = rendements_propres.loc[idx_crash, actifs_bl].cov().values * 52
+                    if cov_crash.shape == cov_matrix_normal.shape:
+                        cov_matrix = 0.7 * cov_matrix_normal + 0.3 * cov_crash
+                    else:
+                        cov_matrix = cov_matrix_normal
+                else:
+                    cov_matrix = cov_matrix_normal
 
-        except Exception as e:
-            logger.error(f"Optimisation BL échouée : {e}")
+                n_a = len(actifs_bl)
+                inv_vol_bl = 1.0 / np.clip(volatilite[actifs_bl].values, 0.01, None)
+                w_eq = inv_vol_bl / inv_vol_bl.sum()
+                Pi = 2.5 * np.dot(cov_matrix, w_eq)
+
+                # Vues ML avec confiance calibrée
+                Q = np.array([ml_predictions.get(a, 0.0) * 52 for a in actifs_bl])
+                omega_diag = [max(abs(ml_cv_scores.get(a, -0.01)) * 52, 0.01) for a in actifs_bl]
+                Omega = np.diag(omega_diag)
+                P = np.eye(n_a)
+                tau = 0.05
+
+                term1 = inv(inv(tau * cov_matrix) + P.T @ inv(Omega) @ P)
+                term2 = inv(tau * cov_matrix) @ Pi + P.T @ inv(Omega) @ Q
+                BL_returns = term1 @ term2
+
+                poids_optimaux = np.clip(inv(cov_matrix) @ BL_returns, 0, None)
+                if poids_optimaux.sum() > 0:
+                    poids_optimaux = poids_optimaux / poids_optimaux.sum()
+                else:
+                    poids_optimaux = w_eq
+
+                # Plafonner les poids
+                for _ in range(10):
+                    if not any(poids_optimaux > max_weight_limit + 1e-5):
+                        break
+                    excess = (poids_optimaux[poids_optimaux > max_weight_limit] - max_weight_limit).sum()
+                    poids_optimaux[poids_optimaux > max_weight_limit] = max_weight_limit
+                    mask = poids_optimaux < max_weight_limit
+                    if mask.sum() > 0:
+                        poids_optimaux[mask] += excess * (poids_optimaux[mask] / poids_optimaux[mask].sum())
+                    else:
+                        break
+
+                port_vol_initial = float(np.sqrt(poids_optimaux.T @ cov_matrix @ poids_optimaux))
+                ret_annuel = rendements_top5.mean() * 52
+                ret_annuel = ret_annuel.fillna(0)
+                expected_portfolio_return = float(np.dot(poids_optimaux, ret_annuel.values))
+                if np.isnan(expected_portfolio_return) or np.isinf(expected_portfolio_return):
+                    expected_portfolio_return = 0.0
+
+                exposure_factor = min(1.0, target_volatility / port_vol_initial if port_vol_initial > 0 else 1.0)
+                vol_cash_pct = 1.0 - exposure_factor
+                reserve_cash_pct = max(min_cash_pct, vol_cash_pct)
+                budget_invest = budget_satellite * (1.0 - reserve_cash_pct)
+
+                if tail_hedge_active:
+                    budget_tail_risk = budget_invest * 0.30
+                    budget_invest -= budget_tail_risk
+
+                allocations_satellite = pd.Series(poids_optimaux * budget_invest, index=actifs_bl)
+                
+                # Éliminer les allocations trop petites (pas rentable avec frais TR)
+                for _ in range(3):
+                    trop_petit = allocations_satellite[allocations_satellite < min_trade_size]
+                    assez_grand = allocations_satellite[allocations_satellite >= min_trade_size]
+                    if len(trop_petit) == 0 or len(assez_grand) == 0:
+                        break
+                    montant_redistribue = trop_petit.sum()
+                    allocations_satellite = assez_grand.copy()
+                    allocations_satellite *= (1 + montant_redistribue / assez_grand.sum())
+                if (allocations_satellite < min_trade_size).all() and len(allocations_satellite) > 0:
+                    meilleur = allocations_satellite.idxmax()
+                    allocations_satellite = pd.Series({meilleur: budget_invest})
+
+            except Exception as e:
+                logger.error(f"Optimisation BL échouée : {e}")
 
 reserve_cash = budget_satellite * reserve_cash_pct
 
@@ -630,7 +681,7 @@ if len(allocations) > 1:
 
 
 # ==========================================
-# 6. BILAN DE SANTÉ PAR POSITION (nouveau V32)
+# 6. BILAN DE SANTÉ PAR POSITION (nouveau V33)
 # ==========================================
 def calculer_sante_position(actif_nom, rendements, vol, mdd, corr_matrix, df_prix, taux, all_actifs_port):
     """Calcule un diagnostic complet pour une position du portefeuille."""
@@ -743,7 +794,7 @@ score_diversification = calculer_score_diversification(actifs_portefeuille, corr
 # ==========================================
 st.markdown(
     "<h2 style='font-family: monospace; border-bottom: 1px solid #444; "
-    "padding-bottom: 10px;'>BUREAU CONSEIL & EXÉCUTION (V32)</h2>",
+    "padding-bottom: 10px;'>BUREAU CONSEIL & EXÉCUTION (V33)</h2>",
     unsafe_allow_html=True,
 )
 
@@ -813,8 +864,9 @@ with tab1:
             for a in tous_actifs_ordres:
                 if a not in univers_etudie:
                     continue
-                val_cible = allocations.get(a, 0.0)
-                val_actuelle = dict_actuel.get(a, 0.0)
+                val_cible_raw = allocations.get(a, 0.0)
+                val_cible = float(val_cible_raw) if pd.notna(val_cible_raw) else 0.0
+                val_actuelle = float(dict_actuel.get(a, 0.0))
                 delta = val_cible - val_actuelle
 
                 # Frais TR : ordre rentable seulement si |delta| > seuil
@@ -929,11 +981,14 @@ with tab2:
         z_str = "N/A"
         if not df_zscore.empty and a in df_zscore["Actif"].values:
             z_str = f"{df_zscore.loc[df_zscore['Actif'] == a, 'Score_Global'].values[0]:.2f}"
+        # Conversion robuste : jamais de None/NaN
+        cap_cible_raw = allocations.get(a, 0.0)
+        cap_cible = float(cap_cible_raw) if pd.notna(cap_cible_raw) else 0.0
         donnees_tab.append({
             "Instrument (Ticker)": f"{univers_etudie[a]['nom']} [{univers_etudie[a]['ticker']}]",
             "Statut": statut,
             "Score Qualité (Z)": z_str,
-            "Capital Cible": allocations.get(a, 0.0),
+            "Capital Cible": cap_cible,
         })
     if donnees_tab:
         st.dataframe(
@@ -951,7 +1006,7 @@ with tab2:
 
 
 # =================================================================
-# ONGLET 3 : BILAN DE SANTÉ (nouveau V32)
+# ONGLET 3 : BILAN DE SANTÉ (nouveau V33)
 # =================================================================
 with tab3:
     st.markdown("### 🩺 Diagnostic individuel de chaque position")
@@ -998,7 +1053,7 @@ with tab3:
 
 
 # =================================================================
-# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V32)
+# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V33)
 # =================================================================
 with tab4:
     st.markdown("### 🔗 Matrice de Corrélation de votre Portefeuille")
@@ -1047,7 +1102,7 @@ with tab4:
 
 
 # =================================================================
-# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V32)
+# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V33)
 # =================================================================
 with tab5:
     st.markdown("### 🔮 Projections Monte Carlo de votre portefeuille")
@@ -1161,7 +1216,8 @@ with tab6:
                 if a in univers_etudie and univers_etudie[a]["ticker"] in df_brut.columns
             ]
             poids_alloc = np.array([
-                allocations[a] / budget for a in allocations.index
+                float(allocations[a]) / budget if pd.notna(allocations[a]) else 0.0
+                for a in allocations.index
                 if a in univers_etudie and univers_etudie[a]["ticker"] in df_brut.columns
             ])
             if len(tickers_alloc) > 0 and poids_alloc.sum() > 0:
@@ -1256,7 +1312,7 @@ with tab7:
 # --- Footer ---
 st.markdown("---")
 st.caption(
-    f"Terminal Quantitatif V32 (Mode DCA · Trade Republic) — "
+    f"Terminal Quantitatif V33 (Mode DCA · Trade Republic) — "
     f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} — "
     f"Taux FX : 1 EUR = {1/taux_fx.get('USD', 1):.4f} USD, "
     f"1 EUR = {1/taux_fx.get('GBP', 1):.4f} GBP — "
