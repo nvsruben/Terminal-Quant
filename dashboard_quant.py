@@ -113,7 +113,7 @@ seuil_vix = st.sidebar.slider("VIX Threshold", 15, 40, 22)
 vol_max = st.sidebar.slider("Max Weekly Volatility (%)", 30, 150, 60) / 100.0
 dd_max = st.sidebar.slider("Max Historical Drawdown (%)", -80, -10, -45) / 100.0
 correl_max = st.sidebar.slider("Covariance Rejection Limit (%)", 50, 95, 75) / 100.0
-# New Limit Constraint
+# Hard Limit Constraint (25% max per position)
 max_weight_limit = 0.25
 
 # --- CORE ENGINE EXECUTION ---
@@ -221,7 +221,7 @@ with st.spinner('Compiling Analyst Consensus and Value Metrics...'):
             info = yf.Ticker(ticker_str).info
             pe = info.get('trailingPE', 15)
             roe = info.get('returnOnEquity', 0.15)
-            consensus = info.get('recommendationMean', 3.0) # 1=Strong Buy, 5=Strong Sell
+            consensus = info.get('recommendationMean', 3.0)
             
             if pe is None or pe < 0 or pe > 100:
                 raisons[candidat] = "FUNDAMENTAL REJECT (Negative/Bubble PE)"
@@ -239,7 +239,7 @@ if not df_zscore.empty:
     df_zscore['Z_PE'] = -calculate_z_score(df_zscore['PE']) 
     df_zscore['Z_ROE'] = calculate_z_score(df_zscore['ROE']) 
     df_zscore['Z_Sortino'] = calculate_z_score(df_zscore['Sortino'])
-    df_zscore['Z_Consensus'] = -calculate_z_score(df_zscore['Consensus']) # Inverse car bas = achat fort
+    df_zscore['Z_Consensus'] = -calculate_z_score(df_zscore['Consensus']) 
     df_zscore['Global_Score'] = df_zscore['Z_PE'].fillna(0) + df_zscore['Z_ROE'].fillna(0) + df_zscore['Z_Sortino'].fillna(0) + df_zscore['Z_Consensus'].fillna(0)
     
     actifs_eligibles_finaux = df_zscore.sort_values(by="Global_Score", ascending=False)['Actif'].tolist()
@@ -376,13 +376,17 @@ with tab2:
             # Stress Test 1 : COVID CRASH (Fev-Avril 2020)
             df_covid_brut = df_history.loc['2020-02-15':'2020-04-30']
             
-            # ANTI-NAN LOGIC (Exclusion des actifs trop récents)
+            # ANTI-NAN LOGIC
             actifs_valides_covid = [a for a in actifs_testes if df_covid_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
             poids_covid = poids_test[actifs_valides_covid]
             
             if len(actifs_valides_covid) > 0 and poids_covid.sum() > 0:
-                poids_covid = poids_covid / poids_covid.sum() # Renormalization to 100%
-                ret_covid = df_covid_brut.pct_change().dropna()
+                poids_covid = poids_covid / poids_covid.sum() # Renormalization
+                
+                # CORRECTION : On isole les colonnes valides AVANT de nettoyer les lignes vides
+                colonnes_covid = [univers_etudie[a]["ticker"] for a in actifs_valides_covid] + ['^GSPC']
+                ret_covid = df_covid_brut[colonnes_covid].pct_change().dropna()
+                
                 port_covid = (ret_covid[ [univers_etudie[a]["ticker"] for a in actifs_valides_covid] ] * poids_covid.values).sum(axis=1)
                 sp_covid = ret_covid['^GSPC']
                 
@@ -411,7 +415,11 @@ with tab2:
             
             if len(actifs_valides_inf) > 0 and poids_inf.sum() > 0:
                 poids_inf = poids_inf / poids_inf.sum()
-                ret_inf = df_inf_brut.pct_change().dropna()
+                
+                # CORRECTION IDENTIQUE POUR 2022 :
+                colonnes_inf = [univers_etudie[a]["ticker"] for a in actifs_valides_inf] + ['^GSPC']
+                ret_inf = df_inf_brut[colonnes_inf].pct_change().dropna()
+                
                 port_inf = (ret_inf[ [univers_etudie[a]["ticker"] for a in actifs_valides_inf] ] * poids_inf.values).sum(axis=1)
                 sp_inf = ret_inf['^GSPC']
                 
