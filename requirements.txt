@@ -9,3 +9,4 @@ requests
 scipy
 scikit-learn
 vaderSentiment
+hmmlearn
