@@ -33,7 +33,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="TERMINAL QUANTITATIF V35", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="TERMINAL QUANTITATIF V36", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # CSS PROFESSIONNEL — STYLE TERMINAL
@@ -181,7 +181,7 @@ if not st.session_state.authentifie:
     st.markdown(
         "<p style='text-align: center; color: #6c7293; font-family: JetBrains Mono, monospace; "
         "font-size: 0.75rem; letter-spacing: 0.15em;'>"
-        "ACCES RESTREINT &mdash; V35 &mdash; ADVISORY &amp; EXECUTION</p>",
+        "ACCES RESTREINT &mdash; V36 &mdash; ADVISORY &amp; EXECUTION</p>",
         unsafe_allow_html=True,
     )
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
@@ -419,8 +419,8 @@ if "mon_portefeuille" not in st.session_state:
             "Core S&P 500", "Bitcoin", "Or Physique", "Palantir",
             "Argent Physique", "Uranium USD", "Rheinmetall",
         ],
-        "Valeur (EUR)": [401.00, 295.00, 114.00, 55.00, 42.00, 10.00, 9.00],
-        "PRU (EUR)": [402.00, 298.00, 101.00, 71.00, 50.00, 12.00, 12.00],
+        "Quantité": [0.72, 0.0035, 4.5, 0.65, 1.8, 0.55, 0.015],
+        "PRU Unitaire (EUR)": [557.0, 84285.0, 22.4, 84.6, 27.8, 19.6, 633.0],
         "🔒 Cœur (Ne pas vendre)": [True, True, True, False, False, False, False],
     })
 
@@ -435,8 +435,8 @@ if st.sidebar.button("FORCER L'ACTUALISATION EN DIRECT", use_container_width=Tru
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='font-family: monospace;'>PARAMÈTRES DU PORTEFEUILLE</h3>", unsafe_allow_html=True)
 
-# [V35] Le capital est calculé automatiquement depuis les positions
-st.sidebar.markdown("*Le capital est calculé depuis vos positions.*")
+# [V36] Le capital est calculé automatiquement depuis les positions
+st.sidebar.markdown("*Valorisation Mark-to-Market en direct.*")
 
 seuil_vix = st.sidebar.slider("Seuil d'Alerte VIX (Panique)", 15, 40, 22)
 target_volatility = st.sidebar.slider("Volatilité Annuelle Cible (%)", 5, 25, 12) / 100.0
@@ -446,22 +446,22 @@ turnover_penalty = st.sidebar.slider("Pénalité de Rotation (%)", 5, 30, 15) / 
 correl_max = st.sidebar.slider("Limite de Corrélation Max (%)", 50, 95, 75) / 100.0
 max_weight_limit = 0.25
 
-# [V35] Validation du portefeuille AVANT tout calcul (fixe le bug V31)
+cash_non_investi = st.sidebar.number_input("Cash non-investi sur TR (EUR)", min_value=0.0, value=5.0, step=1.0)
+
+# Validation du portefeuille AVANT tout calcul
 df_port = st.session_state.mon_portefeuille.copy()
 df_port = df_port.dropna(subset=["Actif"])
 df_port = df_port[df_port["Actif"].isin(univers_etudie.keys())]
 df_port = df_port.drop_duplicates(subset=["Actif"], keep="first")
-df_port["Valeur (EUR)"] = df_port["Valeur (EUR)"].clip(lower=0).fillna(0)
-if "PRU (EUR)" not in df_port.columns:
-    df_port["PRU (EUR)"] = df_port["Valeur (EUR)"]
-df_port["PRU (EUR)"] = df_port["PRU (EUR)"].clip(lower=0).fillna(0)
+if "Quantité" not in df_port.columns:
+    df_port["Quantité"] = 0.0
+df_port["Quantité"] = pd.to_numeric(df_port["Quantité"], errors="coerce").clip(lower=0).fillna(0)
+if "PRU Unitaire (EUR)" not in df_port.columns:
+    df_port["PRU Unitaire (EUR)"] = 0.0
+df_port["PRU Unitaire (EUR)"] = pd.to_numeric(df_port["PRU Unitaire (EUR)"], errors="coerce").clip(lower=0).fillna(0)
 st.session_state.mon_portefeuille = df_port.reset_index(drop=True)
 
-# Capital calculé automatiquement
-budget = float(df_port["Valeur (EUR)"].sum())
-st.sidebar.metric("Capital Total Calculé", f"{budget:.2f} €")
-
-# Alertes déplacées après les calculs (voir plus bas)
+# Budget calculé après téléchargement des données (Mark-to-Market)
 
 
 # ==========================================
@@ -472,6 +472,51 @@ with st.spinner("Calcul des recommandations IA en cours..."):
     df_brut = telecharger_donnees(liste_tickers_bruts)
     taux_fx = obtenir_taux_change()
     avg_nlp_score, df_headlines = analyser_sentiment_nlp()
+
+# ==========================================
+# MARK-TO-MARKET : Valorisation live du portefeuille
+# ==========================================
+def valoriser_position(actif_nom: str, quantite: float, df_prix, taux_fx_dict) -> float:
+    """Calcule la valeur live en EUR d'une position à partir de sa quantité."""
+    if actif_nom not in univers_etudie or quantite <= 0:
+        return 0.0
+    ticker = univers_etudie[actif_nom]["ticker"]
+    if ticker not in df_prix.columns:
+        return 0.0
+    try:
+        prix_brut = float(df_prix[ticker].iloc[-1])
+        if pd.isna(prix_brut) or prix_brut <= 0:
+            return 0.0
+        return quantite * prix_en_eur(prix_brut, ticker, taux_fx_dict)
+    except Exception:
+        return 0.0
+
+# Construire dict_actuel (valeur live EUR) et dict_pru (coût total EUR)
+dict_actuel = {}
+dict_pru = {}
+dict_quantite = {}
+for _, row in st.session_state.mon_portefeuille.iterrows():
+    actif = row["Actif"]
+    if pd.isna(actif) or actif not in univers_etudie:
+        continue
+    qty = float(row.get("Quantité", 0))
+    pru_unit = float(row.get("PRU Unitaire (EUR)", 0))
+    val_live = valoriser_position(actif, qty, df_brut, taux_fx)
+    dict_actuel[actif] = val_live
+    dict_pru[actif] = qty * pru_unit  # Coût total = quantité * PRU unitaire
+    dict_quantite[actif] = qty
+
+# Injecter la valeur live dans le DataFrame pour les calculs en aval
+df_port_live = st.session_state.mon_portefeuille.copy()
+df_port_live["Valeur Live (EUR)"] = df_port_live["Actif"].map(lambda a: dict_actuel.get(a, 0.0))
+
+budget_actions = sum(dict_actuel.values())
+budget = budget_actions + cash_non_investi
+
+st.sidebar.markdown("---")
+st.sidebar.metric("Valeur Actions (Live)", f"{budget_actions:.2f} €")
+st.sidebar.metric("Cash TR", f"{cash_non_investi:.2f} €")
+st.sidebar.metric("Capital Total", f"{budget:.2f} €")
 
 
 # ==========================================
@@ -769,7 +814,7 @@ actifs_verrouilles = [
     if row.get("🔒 Cœur (Ne pas vendre)", False) and row["Actif"] in univers_etudie
 ]
 capital_verrouille = sum(
-    row["Valeur (EUR)"] for _, row in st.session_state.mon_portefeuille.iterrows()
+    dict_actuel.get(row["Actif"], 0.0) for _, row in st.session_state.mon_portefeuille.iterrows()
     if row.get("🔒 Cœur (Ne pas vendre)", False) and row["Actif"] in univers_etudie
 )
 budget_satellite = max(0, budget - capital_verrouille)
@@ -918,7 +963,7 @@ allocations = pd.Series(dtype=float)
 for _, row in st.session_state.mon_portefeuille.iterrows():
     actif = row["Actif"]
     if row.get("🔒 Cœur (Ne pas vendre)", False) and actif in univers_etudie:
-        allocations[actif] = row["Valeur (EUR)"]
+        allocations[actif] = dict_actuel.get(actif, 0.0)
 
 for actif, val in allocations_satellite.items():
     allocations[actif] = allocations.get(actif, 0.0) + val
@@ -942,7 +987,7 @@ if len(allocations) > 1:
 
 
 # ==========================================
-# 6. BILAN DE SANTÉ PAR POSITION (nouveau V35)
+# 6. BILAN DE SANTÉ PAR POSITION (nouveau V36)
 # ==========================================
 def calculer_sante_position(actif_nom, rendements, vol, mdd, corr_matrix, df_prix, taux, all_actifs_port):
     """Calcule un diagnostic complet pour une position du portefeuille."""
@@ -1135,38 +1180,47 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 with tab1:
     col_ed1, col_ed2 = st.columns([1, 1.5])
     with col_ed1:
-        st.markdown("**1. Vos Positions Actuelles (Trade Republic)**")
+        st.markdown("**1. Positions — Mark-to-Market (Trade Republic)**")
+
+        # Préparer le DataFrame d'affichage avec valeur live
+        df_display = st.session_state.mon_portefeuille.copy()
+        df_display["Valeur Live (EUR)"] = df_display["Actif"].map(lambda a: dict_actuel.get(a, 0.0))
+
         config_colonnes = {
             "Actif": st.column_config.SelectboxColumn("Instrument", options=list(univers_etudie.keys()), required=True),
-            "Valeur (EUR)": st.column_config.NumberColumn("Valeur Actuelle", min_value=0.0, step=1.0, format="%.2f"),
-            "PRU (EUR)": st.column_config.NumberColumn("Prix de Revient", min_value=0.0, step=1.0, format="%.2f"),
+            "Quantité": st.column_config.NumberColumn("Parts", min_value=0.0, step=0.01, format="%.4f"),
+            "PRU Unitaire (EUR)": st.column_config.NumberColumn("PRU / Part", min_value=0.0, step=0.1, format="%.2f"),
+            "Valeur Live (EUR)": st.column_config.NumberColumn("Valeur Live", format="%.2f", disabled=True),
         }
         df_edited = st.data_editor(
-            st.session_state.mon_portefeuille,
+            df_display,
             column_config=config_colonnes, num_rows="dynamic", use_container_width=True,
+            disabled=["Valeur Live (EUR)"],
         )
+        # Sauvegarder les colonnes éditables uniquement
         df_edited_clean = df_edited.dropna(subset=["Actif"])
         df_edited_clean = df_edited_clean[df_edited_clean["Actif"].isin(univers_etudie.keys())]
         df_edited_clean = df_edited_clean.drop_duplicates(subset=["Actif"], keep="first")
-        df_edited_clean["Valeur (EUR)"] = df_edited_clean["Valeur (EUR)"].clip(lower=0).fillna(0)
-        if "PRU (EUR)" not in df_edited_clean.columns:
-            df_edited_clean["PRU (EUR)"] = df_edited_clean["Valeur (EUR)"]
-        df_edited_clean["PRU (EUR)"] = df_edited_clean["PRU (EUR)"].clip(lower=0).fillna(0)
-        st.session_state.mon_portefeuille = df_edited_clean.reset_index(drop=True)
+        df_edited_clean["Quantité"] = pd.to_numeric(df_edited_clean["Quantité"], errors="coerce").clip(lower=0).fillna(0)
+        if "PRU Unitaire (EUR)" not in df_edited_clean.columns:
+            df_edited_clean["PRU Unitaire (EUR)"] = 0.0
+        df_edited_clean["PRU Unitaire (EUR)"] = pd.to_numeric(df_edited_clean["PRU Unitaire (EUR)"], errors="coerce").clip(lower=0).fillna(0)
+        # Supprimer la colonne live avant sauvegarde (elle est recalculée)
+        cols_save = ["Actif", "Quantité", "PRU Unitaire (EUR)", "🔒 Cœur (Ne pas vendre)"]
+        st.session_state.mon_portefeuille = df_edited_clean[[c for c in cols_save if c in df_edited_clean.columns]].reset_index(drop=True)
+
+        # Recalculer dict_actuel après édition (quantités peuvent avoir changé)
+        for _, row in st.session_state.mon_portefeuille.iterrows():
+            actif = row["Actif"]
+            if pd.notna(actif) and actif in univers_etudie:
+                qty = float(row.get("Quantité", 0))
+                dict_actuel[actif] = valoriser_position(actif, qty, df_brut, taux_fx)
+                dict_pru[actif] = qty * float(row.get("PRU Unitaire (EUR)", 0))
+                dict_quantite[actif] = qty
 
     with col_ed2:
         st.markdown("**2. Ticket d'Ordres — Optimisation Fiscale Active**")
         lignes_ordres = []
-        dict_actuel = {
-            row["Actif"]: row["Valeur (EUR)"]
-            for _, row in st.session_state.mon_portefeuille.iterrows()
-            if pd.notna(row["Actif"])
-        }
-        dict_pru = {
-            row["Actif"]: row.get("PRU (EUR)", row["Valeur (EUR)"])
-            for _, row in st.session_state.mon_portefeuille.iterrows()
-            if pd.notna(row["Actif"])
-        }
         if len(allocations) > 0:
             tous_actifs_ordres = set(allocations[allocations > 0].index) | set(dict_actuel.keys())
             for a in tous_actifs_ordres:
@@ -1340,7 +1394,7 @@ with tab2:
 
 
 # =================================================================
-# ONGLET 3 : BILAN DE SANTÉ (nouveau V35)
+# ONGLET 3 : BILAN DE SANTÉ (nouveau V36)
 # =================================================================
 with tab3:
     st.markdown("<p class='section-header'>DIAGNOSTIC INDIVIDUEL PAR POSITION</p>", unsafe_allow_html=True)
@@ -1404,7 +1458,7 @@ with tab3:
 
 
 # =================================================================
-# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V35)
+# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V36)
 # =================================================================
 with tab4:
     st.markdown("### MATRICE DE CORRELATION de votre Portefeuille")
@@ -1453,7 +1507,7 @@ with tab4:
 
 
 # =================================================================
-# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V35)
+# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V36)
 # =================================================================
 with tab5:
     st.markdown("### PROJECTIONS MONTE CARLO de votre portefeuille")
@@ -1549,7 +1603,7 @@ with tab5:
 
 
 # =================================================================
-# ONGLET 6 : ASSISTANT DCA (nouveau V35)
+# ONGLET 6 : ASSISTANT DCA (nouveau V36)
 # =================================================================
 with tab6:
     st.markdown("### ASSISTANT DCA — ALLOCATION DU PROCHAIN INVESTISSEMENT")
@@ -1641,7 +1695,7 @@ with tab6:
 
 
 # =================================================================
-# ONGLET 7 : BACKTEST WALK-FORWARD (nouveau V35)
+# ONGLET 7 : BACKTEST WALK-FORWARD (nouveau V36)
 # =================================================================
 with tab7:
     st.markdown("### BACKTEST WALK-FORWARD — PERFORMANCE HISTORIQUE DE LA STRATEGIE")
@@ -1832,7 +1886,7 @@ with tab8:
     if st.button("POUSSER L'ALERTE", use_container_width=False, key="tg_send"):
         if tg_token and tg_chat_id:
             resume = (
-                f"[TERMINAL QUANT V35]\n"
+                f"[TERMINAL QUANT V36]\n"
                 f"Regime: {regime_marche}\n"
                 f"Score Risque: {risk_score}/100\n"
                 f"VIX: {vix_actuel:.1f}\n"
@@ -1968,7 +2022,7 @@ with tab10:
 # --- Footer ---
 st.markdown("---")
 st.caption(
-    f"Terminal Quantitatif V35 (Mode DCA · Trade Republic) — "
+    f"Terminal Quantitatif V36 (Mode DCA · Trade Republic) — "
     f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} — "
     f"Taux FX : 1 EUR = {1/taux_fx.get('USD', 1):.4f} USD, "
     f"1 EUR = {1/taux_fx.get('GBP', 1):.4f} GBP — "
