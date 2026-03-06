@@ -8,3 +8,4 @@ html5lib
 requests
 scipy
 scikit-learn
+vaderSentiment
