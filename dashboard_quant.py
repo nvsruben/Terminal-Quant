@@ -15,7 +15,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="QUANTITATIVE TERMINAL V26", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="QUANTITATIVE TERMINAL V27", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # SYSTEM AUTHENTICATION
@@ -25,7 +25,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.markdown("<h1 style='text-align: center; color: #ffffff; font-family: monospace;'>QUANTITATIVE ALLOCATION DESK</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V26 (CORE-SATELLITE ENGINE).</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V27 (DEEP MEMORY & TEAR SHEET).</p>", unsafe_allow_html=True)
     
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
     with col_login2:
@@ -86,7 +86,8 @@ for cle, donnees in mega_dict.items():
 @st.cache_data(ttl=3600)
 def telecharger_donnees(liste_tickers):
     tickers_complets = liste_tickers + ['^VIX', '^TNX', '^GSPC', '^IRX', 'HYG', 'IEF', 'GLD']
-    df = yf.download(tickers_complets, period="5y", progress=False)['Close']
+    # V27 FIX: Passage à 10 ans pour garantir l'historique de tous les stress-tests
+    df = yf.download(tickers_complets, period="10y", progress=False)['Close']
     df = df.ffill().bfill()
     return df
 
@@ -113,8 +114,9 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='font-family: monospace;'>PORTFOLIO LIMITS</h3>", unsafe_allow_html=True)
 budget = st.sidebar.number_input("Total Capital (EUR)", min_value=10.0, value=950.0, step=10.0)
 target_volatility = st.sidebar.slider("Target Annual Volatility (%)", 5, 25, 12) / 100.0
-min_trade_size = st.sidebar.slider("Minimum Trade Size (EUR)", 10, 100, 50, help="Évite les micro-ordres pour minimiser les frais de courtage Trade Republic.")
+min_trade_size = st.sidebar.slider("Minimum Trade Size (EUR)", 10, 100, 50)
 turnover_penalty = st.sidebar.slider("Hurdle Rate (Turnover Penalty %)", 5, 30, 15) / 100.0
+correl_max = st.sidebar.slider("Base Covariance Limit (%)", 50, 95, 75) / 100.0
 max_weight_limit = 0.25
 
 # --- INIT PORTFOLIO STATE (CORE-SATELLITE) ---
@@ -126,7 +128,7 @@ if 'mon_portefeuille' not in st.session_state:
     })
 
 # --- CORE ENGINE EXECUTION ---
-with st.spinner(f'Initializing Core-Satellite Architecture...'):
+with st.spinner(f'Deep Memory Active. Processing {len(univers_etudie)} instruments over 10 Years...'):
     liste_tickers_bruts = [v["ticker"] for k, v in univers_etudie.items()]
     df_brut = telecharger_donnees(liste_tickers_bruts)
 
@@ -158,8 +160,13 @@ else:
     regime_marche = "VOLATILE REGIME (AI DETECTED)"
     tail_hedge_active = False
 
-# --- DATA PREPARATION ---
-df_hebdo = df_brut.resample('W-FRI').last()
+# ADAPTIVE COVARIANCE LOGIC (V27)
+dynamic_correl_max = correl_max
+if tail_hedge_active or "VOLATILE" in regime_marche:
+    dynamic_correl_max = min(correl_max, 0.55) # Force extreme diversification during stress
+
+# --- DATA PREPARATION (3 Years for Momentum/Calculations) ---
+df_hebdo = df_brut.tail(252*3).resample('W-FRI').last() 
 df_actifs = df_hebdo[liste_tickers_bruts].copy()
 inv_map = {v["ticker"]: k for k, v in univers_etudie.items()}
 df_actifs.rename(columns=inv_map, inplace=True)
@@ -199,7 +206,7 @@ for actif in univers_etudie.keys():
 
 top_20_candidats = sortino_ajuste[actifs_pre_eligibles].sort_values(ascending=False).head(20).index.tolist()
 
-# --- 2. MULTI-FACTOR Z-SCORE ENGINE (V4.0 - TREND INCLUDED) ---
+# --- 2. MULTI-FACTOR Z-SCORE ENGINE ---
 fundamentals_data = []
 for candidat in top_20_candidats:
     ticker_str = univers_etudie[candidat]["ticker"]
@@ -245,13 +252,14 @@ for candidat in actifs_eligibles_finaux:
     if len(top_5_actifs) >= 5: break
     trop_correle = False
     for selectionne in top_5_actifs:
-        if correlation.loc[candidat, selectionne] > 0.75:
+        # V27: Adaptive correlation check
+        if correlation.loc[candidat, selectionne] > dynamic_correl_max:
             trop_correle = True
+            raisons[candidat] = f"FILTERED (Adaptive Covariance w/ {selectionne})"
             break
     if not trop_correle: top_5_actifs.append(candidat)
 
 # --- 3. CORE-SATELLITE & BLACK-LITTERMAN ALLOCATION ---
-# Calcul du capital verrouillé (Core)
 capital_verrouille = 0.0
 actifs_verrouilles = []
 if not st.session_state.mon_portefeuille.empty:
@@ -262,8 +270,8 @@ if not st.session_state.mon_portefeuille.empty:
 
 budget_satellite = budget - capital_verrouille
 
-# Volatility Targeting (Calcul du Cash nécessaire sur le total)
 port_vol_initial = 0.0
+expected_portfolio_return = 0.0
 if len(top_5_actifs) > 0 and budget_satellite > 0:
     try:
         tau = 0.05
@@ -304,12 +312,13 @@ if len(top_5_actifs) > 0 and budget_satellite > 0:
         cov_matrix = lw_cov_top5 * 52
         
     port_vol_initial = np.sqrt(np.dot(poids_optimaux.T, np.dot(cov_matrix, poids_optimaux)))
+    expected_portfolio_return = np.dot(poids_optimaux, (rendements_hebdo[top_5_actifs].mean() * 52).values)
+    
     exposure_factor = target_volatility / port_vol_initial if port_vol_initial > 0 else 1.0
     exposure_factor = min(1.0, exposure_factor) 
     
     pourcentage_cash = 1.0 - exposure_factor
     reserve_cash = budget * pourcentage_cash
-    
     budget_satellite_ajuste = max(0, budget_satellite - reserve_cash)
     
     if tail_hedge_active:
@@ -322,16 +331,12 @@ else:
     reserve_cash = budget_satellite
     budget_tail_risk = 0
 
-# Construction de l'allocation globale (Core + Satellite)
 allocations = pd.Series(dtype=float)
-# 1. Ajout des Cores (Sanctuarisés)
 for _, row in st.session_state.mon_portefeuille.iterrows():
     if row.get("🔒 Core (Ne pas vendre)", False) and row["Actif"] in univers_etudie:
         allocations[row["Actif"]] = row["Valeur (EUR)"]
-# 2. Ajout des Satellites (Générés par l'IA)
 for actif, val in allocations_satellite.items():
     allocations[actif] = allocations.get(actif, 0.0) + val
-# 3. Ajout du Tail Risk
 if tail_hedge_active:
     allocations["US Treasuries 20Y+"] = allocations.get("US Treasuries 20Y+", 0.0) + budget_tail_risk
 
@@ -341,17 +346,14 @@ st.markdown("<h2 style='font-family: monospace; border-bottom: 1px solid #444; p
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("AI MARKET REGIME", regime_marche, delta="K-Means", delta_color="normal" if "BULL" in regime_marche else "inverse")
 col2.metric("STRATEGIC CORE", f"{capital_verrouille:.2f} EUR", delta="Locked Assets", delta_color="off")
-col3.metric("TACTICAL SATELLITE", f"{budget_satellite:.2f} EUR", delta="AI Managed", delta_color="normal")
+col3.metric("TACTICAL SATELLITE", f"{budget_satellite:.2f} EUR", delta=f"Covariance Limit: {dynamic_correl_max*100:.0f}%", delta_color="normal")
 col4.metric("VOL-TARGETED CASH", f"{reserve_cash:.2f} EUR", delta=f"{(reserve_cash/budget)*100:.1f}% dynamic weight", delta_color="off")
 
 tab1, tab2, tab3, tab4 = st.tabs(["ORDER MANAGEMENT SYSTEM (OMS)", "TARGET ALLOCATION MATRIX", "FACTOR EXPOSURE", "HISTORICAL STRESS TESTS"])
 
 with tab1:
     st.markdown("<h4 style='font-family: monospace;'>SMART ORDER MANAGEMENT SYSTEM</h4>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #888;'>Cochez '🔒 Core' pour interdire à l'algorithme de vendre vos convictions de long terme.</p>", unsafe_allow_html=True)
-        
     col_ed1, col_ed2 = st.columns([1, 1.5])
-    
     with col_ed1:
         st.markdown("**1. Vos Positions Actuelles**")
         config_colonnes = {
@@ -359,20 +361,11 @@ with tab1:
             "Valeur (EUR)": st.column_config.NumberColumn("Valeur Actuelle (€)", min_value=0.0, step=10.0, format="%.2f"),
             "🔒 Core (Ne pas vendre)": st.column_config.CheckboxColumn("🔒 Core (Ne pas vendre)", default=False)
         }
-        
-        df_edited = st.data_editor(
-            st.session_state.mon_portefeuille, 
-            column_config=config_colonnes, 
-            num_rows="dynamic", 
-            use_container_width=True,
-            key="editor_portefeuille"
-        )
+        df_edited = st.data_editor(st.session_state.mon_portefeuille, column_config=config_colonnes, num_rows="dynamic", use_container_width=True, key="editor_portefeuille")
         st.session_state.mon_portefeuille = df_edited
-        valeur_totale_investie = df_edited["Valeur (EUR)"].sum() if not df_edited.empty else 0.0
 
     with col_ed2:
         st.markdown("**2. Ticket d'Exécution Généré (Optimisé Frais)**")
-        
         if len(allocations) > 0:
             dict_actuel = {}
             for _, row in df_edited.iterrows():
@@ -380,47 +373,39 @@ with tab1:
                     dict_actuel[row["Actif"]] = dict_actuel.get(row["Actif"], 0.0) + row["Valeur (EUR)"]
             
             tous_les_actifs = list(set(allocations[allocations > 0].index.tolist() + list(dict_actuel.keys())))
-            
             lignes_ordres = []
             for a in tous_les_actifs:
                 val_cible = allocations.get(a, 0.0)
                 val_actuelle = dict_actuel.get(a, 0.0)
                 delta = val_cible - val_actuelle
                 
-                # OPTIMISATION FRAIS TR : On ignore les micro-ordres
                 if abs(delta) >= min_trade_size: 
                     action = "BUY" if delta > 0 else "SELL"
                     nom_complet = univers_etudie[a]["nom"] if a in univers_etudie else a
                     ticker = univers_etudie[a]["ticker"] if a in univers_etudie else ""
-                    lignes_ordres.append({
-                        "Instrument": f"{nom_complet} [{ticker}]",
-                        "Target": val_cible,
-                        "Current": val_actuelle,
-                        "Order Delta (EUR)": delta,
-                        "Action": action
-                    })
+                    lignes_ordres.append({"Instrument": f"{nom_complet} [{ticker}]", "Target": val_cible, "Current": val_actuelle, "Order Delta (EUR)": delta, "Action": action})
                 elif delta != 0:
                     nom_complet = univers_etudie[a]["nom"] if a in univers_etudie else a
                     ticker = univers_etudie[a]["ticker"] if a in univers_etudie else ""
-                    lignes_ordres.append({
-                        "Instrument": f"{nom_complet} [{ticker}]",
-                        "Target": val_cible,
-                        "Current": val_actuelle,
-                        "Order Delta (EUR)": delta,
-                        "Action": "HOLD (Too Small)"
-                    })
+                    lignes_ordres.append({"Instrument": f"{nom_complet} [{ticker}]", "Target": val_cible, "Current": val_actuelle, "Order Delta (EUR)": delta, "Action": "HOLD (Too Small)"})
             
             if len(lignes_ordres) > 0:
                 df_ordres = pd.DataFrame(lignes_ordres).sort_values(by="Order Delta (EUR)", ascending=False)
-                st.dataframe(df_ordres.style.format({
-                    "Target": "{:.2f} €", "Current": "{:.2f} €", "Order Delta (EUR)": "{:+.2f} €"
-                }).applymap(lambda x: 'color: #00cc00; font-weight: bold;' if x == 'BUY' else ('color: #ff4b4b; font-weight: bold;' if x == 'SELL' else 'color: #888888;'), subset=['Action']), use_container_width=True, height=400)
+                st.dataframe(df_ordres.style.format({"Target": "{:.2f} €", "Current": "{:.2f} €", "Order Delta (EUR)": "{:+.2f} €"}).applymap(lambda x: 'color: #00cc00; font-weight: bold;' if x == 'BUY' else ('color: #ff4b4b; font-weight: bold;' if x == 'SELL' else 'color: #888888;'), subset=['Action']), use_container_width=True, height=400)
             else:
                 st.success("✅ Portefeuille aligné. Aucun ordre majeur requis.")
-        else:
-            st.warning("Génération de l'allocation cible en attente...")
 
 with tab2:
+    # --- TEAR SHEET KPIs ---
+    st.markdown("<div style='background-color: #1e1e1e; padding: 15px; border-radius: 5px; margin-bottom: 20px;'>", unsafe_allow_html=True)
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+    expected_sharpe = expected_portfolio_return / port_vol_initial if port_vol_initial > 0 else 0
+    col_kpi1.metric("Expected Annual Return", f"{expected_portfolio_return*100:.1f}%")
+    col_kpi2.metric("Portfolio Sharpe Ratio", f"{expected_sharpe:.2f}")
+    col_kpi3.metric("Global Z-Score Avg", f"{np.mean([df_zscore.loc[df_zscore['Actif'] == a, 'Global_Score'].values[0] for a in top_5_actifs if a in df_zscore['Actif'].values]):.2f}" if len(top_5_actifs)>0 and not df_zscore.empty else "N/A")
+    col_kpi4.metric("Assets Allocated", f"{len(allocations[allocations > 0])}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
     donnees_tableau = []
     actifs_a_afficher = list(dict.fromkeys(list(allocations.index) + top_20_candidats[:15])) 
     
@@ -481,6 +466,7 @@ with tab4:
         if len(actifs_testes) > 0:
             df_history = df_brut.copy()
             
+            # STRESS TEST 1: COVID (NOW WITH 10Y DATA, IT WILL NOT FAIL)
             df_covid_brut = df_history.loc['2020-02-15':'2020-04-30']
             actifs_valides_covid = [a for a in actifs_testes if df_covid_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
             poids_covid = poids_test[actifs_valides_covid]
