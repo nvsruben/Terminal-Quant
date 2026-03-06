@@ -24,7 +24,124 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="TERMINAL QUANTITATIF V33", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="TERMINAL QUANTITATIF V34", layout="wide", initial_sidebar_state="expanded")
+
+# ==========================================
+# CSS PROFESSIONNEL — STYLE TERMINAL
+# ==========================================
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+    
+    /* Global */
+    .stApp { font-family: 'IBM Plex Sans', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { 
+        font-family: 'JetBrains Mono', monospace !important;
+        letter-spacing: 0.05em !important;
+        text-transform: uppercase !important;
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #0a0a0a !important;
+        border-right: 1px solid #1a1a2e !important;
+    }
+    [data-testid="stSidebar"] h3 {
+        font-size: 0.75rem !important;
+        color: #6c7293 !important;
+        letter-spacing: 0.15em !important;
+    }
+    
+    /* Metrics styling */
+    [data-testid="stMetric"] {
+        background-color: #0d0d1a;
+        border: 1px solid #1a1a2e;
+        border-radius: 2px;
+        padding: 12px 16px;
+    }
+    [data-testid="stMetricLabel"] {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.65rem !important;
+        letter-spacing: 0.12em !important;
+        color: #6c7293 !important;
+        text-transform: uppercase !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-weight: 500 !important;
+    }
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0px;
+        border-bottom: 1px solid #1a1a2e;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.7rem !important;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase !important;
+        padding: 8px 16px !important;
+        color: #6c7293 !important;
+        border-radius: 0 !important;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #ffffff !important;
+        border-bottom: 2px solid #4a90e2 !important;
+        background-color: transparent !important;
+    }
+    
+    /* DataFrames */
+    .stDataFrame { border: 1px solid #1a1a2e; border-radius: 2px; }
+    
+    /* Expanders */
+    .streamlit-expanderHeader {
+        font-family: 'IBM Plex Sans', sans-serif !important;
+        font-size: 0.85rem !important;
+        border: 1px solid #1a1a2e !important;
+        border-radius: 2px !important;
+        background-color: #0d0d1a !important;
+    }
+    
+    /* Info boxes */
+    .stAlert { border-radius: 2px !important; border-left: 3px solid #4a90e2 !important; }
+    
+    /* Badge styles */
+    .badge-bull { color: #00c853; font-weight: 600; }
+    .badge-bear { color: #ff1744; font-weight: 600; }
+    .badge-neutral { color: #ffc107; font-weight: 600; }
+    .badge-label { 
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.65rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        padding: 2px 8px;
+        border-radius: 2px;
+        display: inline-block;
+    }
+    .badge-green { background: #0a2e1a; color: #00c853; border: 1px solid #00c853; }
+    .badge-red { background: #2e0a0a; color: #ff1744; border: 1px solid #ff1744; }
+    .badge-yellow { background: #2e2a0a; color: #ffc107; border: 1px solid #ffc107; }
+    .badge-blue { background: #0a1a2e; color: #4a90e2; border: 1px solid #4a90e2; }
+    
+    /* Section dividers */
+    .section-header {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.7rem;
+        letter-spacing: 0.15em;
+        color: #6c7293;
+        text-transform: uppercase;
+        border-bottom: 1px solid #1a1a2e;
+        padding-bottom: 4px;
+        margin: 16px 0 12px 0;
+    }
+    
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # CONSTANTES TRADE REPUBLIC
@@ -41,13 +158,15 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.markdown(
-        "<h1 style='text-align: center; color: #ffffff; font-family: monospace;'>"
+        "<h1 style='text-align: center; color: #ffffff; font-family: JetBrains Mono, monospace; "
+        "letter-spacing: 0.1em; font-weight: 300;'>"
         "BUREAU D'ALLOCATION QUANTITATIVE</h1>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        "<p style='text-align: center; color: #888888; font-family: monospace;'>"
-        "ACCÈS RESTREINT. V33 — MODE DCA · TRADE REPUBLIC.</p>",
+        "<p style='text-align: center; color: #6c7293; font-family: JetBrains Mono, monospace; "
+        "font-size: 0.75rem; letter-spacing: 0.15em;'>"
+        "ACCES RESTREINT &mdash; V34 &mdash; ADVISORY &amp; EXECUTION</p>",
         unsafe_allow_html=True,
     )
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
@@ -245,7 +364,7 @@ if st.sidebar.button("FORCER L'ACTUALISATION EN DIRECT", use_container_width=Tru
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='font-family: monospace;'>PARAMÈTRES DU PORTEFEUILLE</h3>", unsafe_allow_html=True)
 
-# [V33] Le capital est calculé automatiquement depuis les positions
+# [V34] Le capital est calculé automatiquement depuis les positions
 st.sidebar.markdown("*Le capital est calculé depuis vos positions.*")
 
 seuil_vix = st.sidebar.slider("Seuil d'Alerte VIX (Panique)", 15, 40, 22)
@@ -256,7 +375,7 @@ turnover_penalty = st.sidebar.slider("Pénalité de Rotation (%)", 5, 30, 15) / 
 correl_max = st.sidebar.slider("Limite de Corrélation Max (%)", 50, 95, 75) / 100.0
 max_weight_limit = 0.25
 
-# [V33] Validation du portefeuille AVANT tout calcul (fixe le bug V31)
+# [V34] Validation du portefeuille AVANT tout calcul (fixe le bug V31)
 df_port = st.session_state.mon_portefeuille.copy()
 df_port = df_port.dropna(subset=["Actif"])
 df_port = df_port[df_port["Actif"].isin(univers_etudie.keys())]
@@ -267,6 +386,37 @@ st.session_state.mon_portefeuille = df_port.reset_index(drop=True)
 # Capital calculé automatiquement
 budget = float(df_port["Valeur (EUR)"].sum())
 st.sidebar.metric("Capital Total Calculé", f"{budget:.2f} €")
+
+# ==========================================
+# SYSTEME D'ALERTES (nouveau V34)
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.markdown("<h3 style='font-family: monospace;'>ALERTES ACTIVES</h3>", unsafe_allow_html=True)
+
+alertes = []
+if vix_actuel > seuil_vix:
+    alertes.append(("CRITIQUE", f"VIX a {vix_actuel:.1f} > seuil {seuil_vix}"))
+if risk_score >= 70:
+    alertes.append(("CRITIQUE", f"Score risque {risk_score}/100 — regime krach"))
+elif risk_score >= 40:
+    alertes.append(("ATTENTION", f"Score risque {risk_score}/100 — regime defensif"))
+if curve_inverted:
+    alertes.append(("ATTENTION", "Courbe des taux inversee"))
+if credit_stress:
+    alertes.append(("ATTENTION", "Stress sur le credit detecte"))
+if sp500_close < sp500_sma200:
+    alertes.append(("ATTENTION", "S&P 500 sous sa SMA 200"))
+
+if alertes:
+    for niveau, msg in alertes:
+        if niveau == "CRITIQUE":
+            st.sidebar.error(f"[{niveau}] {msg}")
+        else:
+            st.sidebar.warning(f"[{niveau}] {msg}")
+else:
+    st.sidebar.success("Aucune alerte active")
+
+# Les alertes par position sont affichées dans l'onglet Bilan de Santé
 
 
 # ==========================================
@@ -680,7 +830,7 @@ if len(allocations) > 1:
 
 
 # ==========================================
-# 6. BILAN DE SANTÉ PAR POSITION (nouveau V33)
+# 6. BILAN DE SANTÉ PAR POSITION (nouveau V34)
 # ==========================================
 def calculer_sante_position(actif_nom, rendements, vol, mdd, corr_matrix, df_prix, taux, all_actifs_port):
     """Calcule un diagnostic complet pour une position du portefeuille."""
@@ -750,11 +900,11 @@ def calculer_sante_position(actif_nom, rendements, vol, mdd, corr_matrix, df_pri
 
     # Recommandation
     if resultats["score_sante"] >= 70:
-        resultats["recommandation"] = "🟢 RENFORCER"
+        resultats["recommandation"] = "▲ RENFORCER"
     elif resultats["score_sante"] >= 40:
-        resultats["recommandation"] = "🟡 CONSERVER"
+        resultats["recommandation"] = "■ CONSERVER"
     else:
-        resultats["recommandation"] = "🔴 ALLÉGER"
+        resultats["recommandation"] = "▼ ALLÉGER"
 
     return resultats
 
@@ -792,8 +942,8 @@ score_diversification = calculer_score_diversification(actifs_portefeuille, corr
 # INTERFACE PRINCIPALE
 # ==========================================
 st.markdown(
-    "<h2 style='font-family: monospace; border-bottom: 1px solid #444; "
-    "padding-bottom: 10px;'>BUREAU CONSEIL & EXÉCUTION (V33)</h2>",
+    "<h2 style='font-family: JetBrains Mono, monospace; border-bottom: 1px solid #1a1a2e; "
+    "padding-bottom: 10px; letter-spacing: 0.08em; font-weight: 400;'>BUREAU CONSEIL &amp; EXECUTION</h2>",
     unsafe_allow_html=True,
 )
 
@@ -817,14 +967,16 @@ col4.metric(
     delta=f"{reserve_pct_display:.1f}% de protection", delta_color="off",
 )
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "💡 CONSEIL & EXÉCUTION (OMS)",
-    "MATRICE D'ALLOCATION CIBLE",
-    "🩺 BILAN DE SANTÉ",
-    "🔗 DIVERSIFICATION",
-    "🔮 PROJECTIONS MONTE CARLO",
-    "ANALYSE DE RISQUE (PCA)",
-    "STRESS-TESTS HISTORIQUES",
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    "CONSEIL & EXECUTION",
+    "ALLOCATION CIBLE",
+    "BILAN DE SANTE",
+    "DIVERSIFICATION",
+    "PROJECTIONS MONTE CARLO",
+    "ASSISTANT DCA",
+    "BACKTEST WALK-FORWARD",
+    "ANALYSE PCA",
+    "STRESS-TESTS",
 ])
 
 
@@ -904,12 +1056,12 @@ with tab1:
                     use_container_width=True,
                 )
                 if total_frais > 0:
-                    st.caption(f"💰 Coût total estimé des ordres sur Trade Republic : **{total_frais:.2f} €** (frais 1€/ordre + spread ~0.15%)")
+                    st.caption(f"Coût total estimé des ordres sur Trade Republic : **{total_frais:.2f} €** (frais 1€/ordre + spread ~0.15%)")
             else:
-                st.success("🎉 Portefeuille optimisé. Aucun ordre nécessaire.")
+                st.success("Portefeuille optimisé. Aucun ordre nécessaire.")
 
     st.markdown("---")
-    st.markdown("### 🧠 Le Diagnostic du Quant (Justification des choix)")
+    st.markdown("<p class='section-header'>DIAGNOSTIC — JUSTIFICATION DES RECOMMANDATIONS</p>", unsafe_allow_html=True)
 
     st.info(
         f"**Vision Macroéconomique :** Le logiciel détecte un **{regime_marche}**. "
@@ -920,7 +1072,7 @@ with tab1:
 
     col_c1, col_c2 = st.columns(2)
     with col_c1:
-        st.markdown("#### 🔴 Pourquoi l'IA vend certains actifs ?")
+        st.markdown("#### ORDRES DE VENTE — RATIONALE")
         a_vendre = [r["Instrument"] for r in lignes_ordres if r["Action"] == "VENDRE"]
         if not a_vendre:
             st.write("Aucune vente recommandée. Vos actifs non-verrouillés restent pertinents.")
@@ -938,7 +1090,7 @@ with tab1:
                         st.write(f"- **{instr} :** Surpondéré par rapport au risque global. Prise de profits recommandée.")
 
     with col_c2:
-        st.markdown("#### 🟢 Pourquoi l'IA achète ces actifs ?")
+        st.markdown("#### ORDRES D'ACHAT — RATIONALE")
         a_acheter = [r["Instrument"] for r in lignes_ordres if r["Action"] == "ACHETER"]
         if not a_acheter:
             st.write("Aucun achat recommandé. Le portefeuille actuel est bien positionné.")
@@ -1005,13 +1157,13 @@ with tab2:
 
 
 # =================================================================
-# ONGLET 3 : BILAN DE SANTÉ (nouveau V33)
+# ONGLET 3 : BILAN DE SANTÉ (nouveau V34)
 # =================================================================
 with tab3:
-    st.markdown("### 🩺 Diagnostic individuel de chaque position")
+    st.markdown("<p class='section-header'>DIAGNOSTIC INDIVIDUEL PAR POSITION</p>", unsafe_allow_html=True)
     st.markdown(
         f"**Score de diversification global : {score_diversification}/100** "
-        + ("🟢 Excellent" if score_diversification >= 70 else "🟡 Correct" if score_diversification >= 40 else "🔴 Insuffisant")
+        + ("&mdash; Excellent" if score_diversification >= 70 else "&mdash; Correct" if score_diversification >= 40 else "&mdash; Insuffisant")
     )
     st.markdown("---")
 
@@ -1028,8 +1180,8 @@ with tab3:
                 c4.metric("Sortino", f"{sp['sortino']:.2f}")
 
                 c5, c6, c7, c8 = st.columns(4)
-                sma200_txt = "✅ Oui" if sp["au_dessus_sma200"] else ("❌ Non" if sp["au_dessus_sma200"] is False else "N/A")
-                sma50_txt = "✅ Oui" if sp["au_dessus_sma50"] else ("❌ Non" if sp["au_dessus_sma50"] is False else "N/A")
+                sma200_txt = "OUI" if sp["au_dessus_sma200"] else ("NON" if sp["au_dessus_sma200"] is False else "N/A")
+                sma50_txt = "OUI" if sp["au_dessus_sma50"] else ("NON" if sp["au_dessus_sma50"] is False else "N/A")
                 c5.metric("Au-dessus SMA 200j", sma200_txt)
                 c6.metric("Au-dessus SMA 50j", sma50_txt)
                 c7.metric("Distance SMA 200j", f"{sp['distance_sma200_pct']:+.1f}%")
@@ -1052,10 +1204,10 @@ with tab3:
 
 
 # =================================================================
-# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V33)
+# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V34)
 # =================================================================
 with tab4:
-    st.markdown("### 🔗 Matrice de Corrélation de votre Portefeuille")
+    st.markdown("### MATRICE DE CORRELATION de votre Portefeuille")
 
     actifs_corr = [a for a in actifs_portefeuille if a in correlation.index]
     if len(actifs_corr) > 1:
@@ -1084,7 +1236,7 @@ with tab4:
         )
 
         # Paires les plus corrélées
-        st.markdown("#### ⚠️ Paires les plus corrélées (risque de concentration)")
+        st.markdown("#### Paires les plus corrélées (risque de concentration)")
         paires = []
         for i, a1 in enumerate(actifs_corr):
             for a2 in actifs_corr[i+1:]:
@@ -1101,10 +1253,10 @@ with tab4:
 
 
 # =================================================================
-# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V33)
+# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V34)
 # =================================================================
 with tab5:
-    st.markdown("### 🔮 Projections Monte Carlo de votre portefeuille")
+    st.markdown("### PROJECTIONS MONTE CARLO de votre portefeuille")
     st.markdown("*Simulation de 1000 trajectoires possibles sur 1 an, basée sur les rendements historiques de vos actifs.*")
 
     actifs_mc = [a for a in actifs_portefeuille if a in rendements_hebdo.columns]
@@ -1168,7 +1320,7 @@ with tab5:
 
         col_mc1, col_mc2, col_mc3, col_mc4, col_mc5 = st.columns(5)
         col_mc1.metric("Probabilité de perte", f"{proba_perte:.1f}%",
-                       delta="⚠️ Attention" if proba_perte > 50 else "✅ Favorable",
+                       delta="ATTENTION" if proba_perte > 50 else "FAVORABLE",
                        delta_color="inverse" if proba_perte > 50 else "normal")
         col_mc2.metric("Prob. perte > 10%", f"{proba_perte_10:.1f}%")
         col_mc3.metric("Scénario médian (1 an)", f"{gain_median:+.1f}%")
@@ -1176,7 +1328,7 @@ with tab5:
         col_mc5.metric("Meilleur scénario (95e %)", f"{meilleur_cas:+.1f}%")
 
         st.markdown("---")
-        st.markdown("#### 📊 Distribution des rendements à 1 an")
+        st.markdown("#### DISTRIBUTION DES RENDEMENTS à 1 an")
         fig_hist = px.histogram(
             x=((val_finales / budget) - 1) * 100,
             nbins=50,
@@ -1197,9 +1349,215 @@ with tab5:
 
 
 # =================================================================
-# ONGLET 6 : ANALYSE DE RISQUE (PCA)
+# ONGLET 6 : ASSISTANT DCA (nouveau V34)
 # =================================================================
 with tab6:
+    st.markdown("### ASSISTANT DCA — ALLOCATION DU PROCHAIN INVESTISSEMENT")
+    st.markdown("*Simulez un investissement DCA et l'assistant calcule la répartition optimale pour rééquilibrer votre portefeuille.*")
+
+    montant_dca = st.number_input("Montant à investir ce mois-ci (EUR)", min_value=10.0, value=50.0, step=10.0, key="dca_input")
+
+    if montant_dca > 0 and budget > 0 and len(actifs_portefeuille) > 0:
+        # Calculer les poids actuels vs poids cibles
+        poids_actuels = {}
+        poids_cibles = {}
+        total_futur = budget + montant_dca
+
+        for actif in actifs_portefeuille:
+            val_actuelle = dict_actuel.get(actif, 0)
+            poids_actuels[actif] = val_actuelle / budget if budget > 0 else 0
+            val_cible = allocations.get(actif, val_actuelle)
+            val_cible = float(val_cible) if pd.notna(val_cible) else val_actuelle
+            poids_cibles[actif] = val_cible / budget if budget > 0 else 0
+
+        # Calculer l'écart par rapport aux cibles
+        ecarts = {}
+        for actif in actifs_portefeuille:
+            val_actuelle = dict_actuel.get(actif, 0)
+            val_cible_future = poids_cibles.get(actif, 0) * total_futur
+            ecart = val_cible_future - val_actuelle
+            ecarts[actif] = max(0, ecart)  # On n'investit que, on ne vend pas en DCA
+
+        total_ecarts = sum(ecarts.values())
+
+        # Répartir le montant DCA proportionnellement aux écarts
+        recommandations_dca = {}
+        if total_ecarts > 0:
+            for actif, ecart in ecarts.items():
+                montant = (ecart / total_ecarts) * montant_dca
+                if montant >= FRAIS_ORDRE_TR + 1:  # Minimum rentable
+                    recommandations_dca[actif] = montant
+        
+        # Si aucune reco (tout est déjà équilibré), répartir sur les positions santé élevée
+        if not recommandations_dca and sante_positions:
+            top_sante = sorted(sante_positions, key=lambda x: x["score_sante"], reverse=True)[:3]
+            for sp in top_sante:
+                recommandations_dca[sp["actif"]] = montant_dca / len(top_sante)
+
+        if recommandations_dca:
+            # Normaliser au montant exact
+            total_reco = sum(recommandations_dca.values())
+            if total_reco > 0:
+                recommandations_dca = {k: v * montant_dca / total_reco for k, v in recommandations_dca.items()}
+
+            st.markdown(f"<p class='section-header'>PLAN D'INVESTISSEMENT — {montant_dca:.0f} EUR</p>", unsafe_allow_html=True)
+
+            lignes_dca = []
+            for actif, montant in sorted(recommandations_dca.items(), key=lambda x: x[1], reverse=True):
+                pct = (montant / montant_dca) * 100
+                frais = FRAIS_ORDRE_TR + montant * SPREAD_ESTIME_TR
+                sante_score = next((s["score_sante"] for s in sante_positions if s["actif"] == actif), 50)
+                poids_apres = ((dict_actuel.get(actif, 0) + montant) / total_futur) * 100
+                lignes_dca.append({
+                    "Instrument": univers_etudie.get(actif, {"nom": actif})["nom"],
+                    "Montant": montant,
+                    "Allocation DCA": f"{pct:.0f}%",
+                    "Frais TR": frais,
+                    "Score Sante": sante_score,
+                    "Poids apres DCA": f"{poids_apres:.1f}%",
+                })
+
+            df_dca = pd.DataFrame(lignes_dca)
+            st.dataframe(
+                df_dca.style.format({"Montant": "{:.2f} EUR", "Frais TR": "{:.2f} EUR"}),
+                use_container_width=True,
+            )
+
+            total_frais_dca = sum(FRAIS_ORDRE_TR + m * SPREAD_ESTIME_TR for m in recommandations_dca.values())
+            pct_frais = (total_frais_dca / montant_dca) * 100
+            st.caption(
+                f"Frais totaux estimés : **{total_frais_dca:.2f} EUR** ({pct_frais:.1f}% du montant). "
+                f"Nombre d'ordres : **{len(recommandations_dca)}** x {FRAIS_ORDRE_TR} EUR."
+            )
+
+            if pct_frais > 5:
+                st.warning(
+                    f"Les frais représentent {pct_frais:.1f}% du montant investi. "
+                    "Il peut être plus rentable d'attendre d'avoir un montant plus élevé "
+                    "ou de concentrer sur moins de lignes."
+                )
+        else:
+            st.info("Portefeuille déjà équilibré. Investissez sur votre position préférée.")
+
+
+# =================================================================
+# ONGLET 7 : BACKTEST WALK-FORWARD (nouveau V34)
+# =================================================================
+with tab7:
+    st.markdown("### BACKTEST WALK-FORWARD — PERFORMANCE HISTORIQUE DE LA STRATEGIE")
+    st.markdown("*Simulation de la stratégie d'allocation sur les 3 dernières années vs un DCA passif sur le S&P 500.*")
+
+    if len(actifs_portefeuille) > 0 and budget > 0:
+        # Poids du portefeuille actuel
+        actifs_bt = [a for a in actifs_portefeuille if a in rendements_hebdo.columns]
+        if len(actifs_bt) > 0:
+            poids_bt = np.array([dict_actuel.get(a, 0) for a in actifs_bt])
+            if poids_bt.sum() > 0:
+                poids_bt = poids_bt / poids_bt.sum()
+            else:
+                poids_bt = np.ones(len(actifs_bt)) / len(actifs_bt)
+
+            ret_bt = rendements_hebdo[actifs_bt].fillna(0)
+
+            # S&P 500 benchmark
+            sp500_key = "Core S&P 500" if "Core S&P 500" in rendements_hebdo.columns else None
+            if sp500_key is None:
+                # Fallback : utiliser ^GSPC
+                sp500_ticker = "^GSPC"
+                if sp500_ticker in df_brut.columns:
+                    sp500_weekly = df_brut[sp500_ticker].resample("W-FRI").last().pct_change().dropna()
+                    sp500_weekly = sp500_weekly.reindex(ret_bt.index).fillna(0)
+                else:
+                    sp500_weekly = pd.Series(0, index=ret_bt.index)
+            else:
+                sp500_weekly = ret_bt[sp500_key] if sp500_key in ret_bt.columns else pd.Series(0, index=ret_bt.index)
+
+            # Rendements du portefeuille
+            port_ret_bt = (ret_bt * poids_bt).sum(axis=1)
+
+            # Croissance cumulée
+            croissance_port = (1 + port_ret_bt).cumprod()
+            croissance_sp = (1 + sp500_weekly).cumprod()
+
+            # Métriques
+            ret_annuel_port = port_ret_bt.mean() * 52
+            vol_annuel_port = port_ret_bt.std() * np.sqrt(52)
+            sharpe_port = ret_annuel_port / vol_annuel_port if vol_annuel_port > 0 else 0
+
+            ret_annuel_sp = sp500_weekly.mean() * 52
+            vol_annuel_sp = sp500_weekly.std() * np.sqrt(52)
+            sharpe_sp = ret_annuel_sp / vol_annuel_sp if vol_annuel_sp > 0 else 0
+
+            # Max drawdown
+            peak_port = croissance_port.cummax()
+            dd_port = ((croissance_port - peak_port) / peak_port).min()
+            peak_sp = croissance_sp.cummax()
+            dd_sp = ((croissance_sp - peak_sp) / peak_sp).min()
+
+            # Calmar ratio
+            calmar_port = ret_annuel_port / abs(dd_port) if dd_port != 0 else 0
+            calmar_sp = ret_annuel_sp / abs(dd_sp) if dd_sp != 0 else 0
+
+            # Graphique
+            fig_bt = go.Figure()
+            fig_bt.add_trace(go.Scatter(
+                x=croissance_port.index, y=croissance_port.values * 100,
+                mode="lines", name="Votre Portefeuille",
+                line=dict(color="#4a90e2", width=2),
+            ))
+            fig_bt.add_trace(go.Scatter(
+                x=croissance_sp.index, y=croissance_sp.values * 100,
+                mode="lines", name="S&P 500 (Benchmark)",
+                line=dict(color="#555555", width=1.5, dash="dot"),
+            ))
+            fig_bt.add_hline(y=100, line_dash="dash", line_color="#333333")
+            fig_bt.update_layout(
+                template="plotly_dark", height=450,
+                margin=dict(t=10, b=40, l=40, r=10),
+                xaxis_title="", yaxis_title="Base 100",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(fig_bt, use_container_width=True)
+
+            # Tableau de métriques comparatives
+            col_bt1, col_bt2, col_bt3, col_bt4 = st.columns(4)
+            col_bt1.metric("Rendement annualisé", f"{ret_annuel_port*100:.1f}%", delta=f"vs S&P: {ret_annuel_sp*100:.1f}%")
+            col_bt2.metric("Ratio de Sharpe", f"{sharpe_port:.2f}", delta=f"vs S&P: {sharpe_sp:.2f}")
+            col_bt3.metric("Max Drawdown", f"{dd_port*100:.1f}%", delta=f"vs S&P: {dd_sp*100:.1f}%")
+            col_bt4.metric("Ratio de Calmar", f"{calmar_port:.2f}", delta=f"vs S&P: {calmar_sp:.2f}")
+
+            # Drawdown chart
+            st.markdown("<p class='section-header'>HISTORIQUE DES DRAWDOWNS</p>", unsafe_allow_html=True)
+            dd_series_port = (croissance_port - peak_port) / peak_port * 100
+            dd_series_sp = (croissance_sp - peak_sp) / peak_sp * 100
+
+            fig_dd = go.Figure()
+            fig_dd.add_trace(go.Scatter(
+                x=dd_series_port.index, y=dd_series_port.values,
+                fill="tozeroy", name="Portefeuille",
+                line=dict(color="#4a90e2"), fillcolor="rgba(74,144,226,0.2)",
+            ))
+            fig_dd.add_trace(go.Scatter(
+                x=dd_series_sp.index, y=dd_series_sp.values,
+                fill="tozeroy", name="S&P 500",
+                line=dict(color="#555555"), fillcolor="rgba(85,85,85,0.1)",
+            ))
+            fig_dd.update_layout(
+                template="plotly_dark", height=250,
+                margin=dict(t=10, b=10, l=40, r=10),
+                yaxis_title="Drawdown (%)",
+            )
+            st.plotly_chart(fig_dd, use_container_width=True)
+        else:
+            st.warning("Données insuffisantes pour le backtest.")
+    else:
+        st.warning("Aucune position pour le backtest.")
+
+
+# =================================================================
+# ONGLET 8 : ANALYSE PCA
+# =================================================================
+with tab8:
     col_pca1, col_pca2 = st.columns([1, 1.5])
     with col_pca1:
         st.markdown("**Analyse en Composantes Principales (PCA)**")
@@ -1245,9 +1603,9 @@ with tab6:
 
 
 # =================================================================
-# ONGLET 7 : STRESS-TESTS HISTORIQUES
+# ONGLET 9 : STRESS-TESTS
 # =================================================================
-with tab7:
+with tab9:
     if len(allocations) > 0:
         poids_test = (pd.Series(allocations) / budget).fillna(0)
         actifs_testes = poids_test[poids_test > 0].index.tolist()
@@ -1311,7 +1669,7 @@ with tab7:
 # --- Footer ---
 st.markdown("---")
 st.caption(
-    f"Terminal Quantitatif V33 (Mode DCA · Trade Republic) — "
+    f"Terminal Quantitatif V34 (Mode DCA · Trade Republic) — "
     f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} — "
     f"Taux FX : 1 EUR = {1/taux_fx.get('USD', 1):.4f} USD, "
     f"1 EUR = {1/taux_fx.get('GBP', 1):.4f} GBP — "
