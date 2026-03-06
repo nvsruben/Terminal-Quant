@@ -1767,7 +1767,7 @@ with tab8:
             # Tableau de la matrice de transition
             labels = [hmm_regime_names.get(i, f"Etat {i}") for i in range(3)]
             df_trans = pd.DataFrame(hmm_transmat, index=labels, columns=labels)
-            st.dataframe(df_trans.style.format("{:.1%}").background_gradient(cmap="RdYlGn_r", vmin=0, vmax=0.5), use_container_width=True)
+            st.dataframe(df_trans.style.format("{:.1%}"), use_container_width=True)
 
         with col_hmm2:
             # Heatmap de la matrice de transition
