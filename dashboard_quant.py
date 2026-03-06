@@ -7,9 +7,12 @@ import plotly.graph_objects as go
 from datetime import datetime
 import requests
 from scipy.linalg import inv
+import warnings
+
+warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="Terminal Quantitatif V19.1", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Terminal Quantitatif V20", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # SYSTÈME D'AUTHENTIFICATION STRICTE
@@ -19,7 +22,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.title("QUANTITATIVE ALLOCATION TERMINAL")
-    st.markdown("AUTHENTIFICATION REQUISE. ACCÈS RESTREINT (V19.1 - ML & Smart Beta).")
+    st.markdown("AUTHENTIFICATION REQUISE. ACCÈS RESTREINT (V20 - Black-Litterman & CVaR).")
     MOT_DE_PASSE_SECRET = "BTSCG2026" 
     mdp_saisi = st.text_input("Passkey", type="password")
     if st.button("INITIALISER LA SESSION"):
@@ -76,8 +79,10 @@ for cle, donnees in mega_dict.items():
 
 @st.cache_data(ttl=3600)
 def telecharger_donnees(liste_tickers):
-    tickers_complets = liste_tickers + ['^VIX', '^TNX', '^GSPC']
-    df = yf.download(tickers_complets, period="3y", progress=False)['Close']
+    # Ajout des capteurs Macro : ^IRX (3 Mois), HYG (High Yield Credit), IEF (Safe Bonds)
+    tickers_complets = liste_tickers + ['^VIX', '^TNX', '^GSPC', '^IRX', 'HYG', 'IEF']
+    # Passage à 5 ans pour les Stress-Tests
+    df = yf.download(tickers_complets, period="5y", progress=False)['Close']
     df = df.ffill().bfill()
     return df
 
@@ -107,29 +112,57 @@ vol_max = st.sidebar.slider("Max Weekly Volatility (%)", 30, 150, 60) / 100.0
 dd_max = st.sidebar.slider("Max Historical Drawdown (%)", -80, -10, -45) / 100.0
 correl_max = st.sidebar.slider("Covariance Rejection Limit (%)", 50, 95, 75) / 100.0
 
-# --- TÉLÉCHARGEMENT MASSIF ---
-with st.spinner(f'Processing {len(univers_etudie)} market instruments & running ML...'):
+# --- TÉLÉCHARGEMENT MASSIF (5 ANS) ---
+with st.spinner(f'Processing {len(univers_etudie)} instruments & running Black-Litterman Inference...'):
     liste_tickers_bruts = [v["ticker"] for k, v in univers_etudie.items()]
     df_brut = telecharger_donnees(liste_tickers_bruts)
 
+# --- 1. DÉTECTION DE RÉGIME MULTI-FACTEURS ---
 vix_actuel = float(df_brut['^VIX'].iloc[-1])
-taux_fed_10y = float(df_brut['^TNX'].iloc[-1])
+taux_10y = float(df_brut['^TNX'].iloc[-1])
+taux_3m = float(df_brut['^IRX'].iloc[-1])
 
+# A. Facteur Tendance Absolue (S&P 500 SMA 200)
 sp500_close = float(df_brut['^GSPC'].iloc[-1])
 sp500_sma200 = float(df_brut['^GSPC'].tail(200).mean())
-regime_marche = "BULL MARKET" if sp500_close > sp500_sma200 else "BEAR MARKET"
+trend_bear = sp500_close < sp500_sma200
 
-if regime_marche == "BEAR MARKET": pourcentage_cash = 0.80 
-elif vix_actuel > seuil_vix and taux_fed_10y > 4.5: pourcentage_cash = 0.30
-elif vix_actuel > seuil_vix: pourcentage_cash = 0.20
-else: pourcentage_cash = 0.0
+# B. Facteur Courbe des Taux (Yield Curve Inversion)
+yield_curve_spread = taux_10y - taux_3m
+curve_inverted = yield_curve_spread < 0.0
+
+# C. Facteur Stress de Crédit (High Yield vs Safe Bonds)
+df_brut['Credit_Spread'] = df_brut['HYG'] / df_brut['IEF']
+credit_spread_actuel = float(df_brut['Credit_Spread'].iloc[-1])
+credit_spread_sma50 = float(df_brut['Credit_Spread'].tail(50).mean())
+credit_stress = credit_spread_actuel < credit_spread_sma50
+
+# Calcul du Systemic Risk Score (0 à 100)
+risk_score = 0
+if trend_bear: risk_score += 40
+if curve_inverted: risk_score += 30
+if credit_stress: risk_score += 30
+if vix_actuel > seuil_vix: risk_score = min(100, risk_score + 20)
+
+if risk_score >= 70:
+    regime_marche = "CRITICAL BEAR MARKET"
+    pourcentage_cash = 0.80 
+elif risk_score >= 40:
+    regime_marche = "DEFENSIVE REGIME"
+    pourcentage_cash = 0.40
+elif vix_actuel > seuil_vix:
+    regime_marche = "HIGH VOLATILITY"
+    pourcentage_cash = 0.20
+else:
+    regime_marche = "BULL MARKET"
+    pourcentage_cash = 0.0
 
 reserve_cash = budget * pourcentage_cash
 budget_investissable = budget - reserve_cash
 
+# Extraction des prix des actifs
 df_hebdo = df_brut.resample('W-FRI').last()
 df_actifs = df_hebdo[liste_tickers_bruts].copy()
-
 inv_map = {v["ticker"]: k for k, v in univers_etudie.items()}
 df_actifs.rename(columns=inv_map, inplace=True)
 
@@ -152,7 +185,7 @@ sortino_ajuste = sortino_brut.copy()
 for actif in sortino_ajuste.index:
     if "S&P500:" in actif: sortino_ajuste[actif] = sortino_ajuste[actif] * 0.85 
 
-# --- PRE-FILTRAGE MATHÉMATIQUE ---
+# --- PRE-FILTRAGE & SMART BETA ---
 actifs_pre_eligibles = []
 raisons = {}
 for actif in univers_etudie.keys():
@@ -163,33 +196,25 @@ for actif in univers_etudie.keys():
     elif dd < dd_max: raisons[actif] = f"REJETÉ (Max DD < {dd_max*100:.0f}%)"
     else: actifs_pre_eligibles.append(actif)
 
-# On isole les 15 meilleurs pour l'inspection fondamentale (Smart Beta)
 top_15_candidats = sortino_ajuste[actifs_pre_eligibles].sort_values(ascending=False).head(15).index.tolist()
 actifs_eligibles_finaux = []
 
-# --- FILTRE FONDAMENTAL (SMART BETA) ---
-with st.spinner('Running Fundamental Due Diligence on Top Candidates...'):
+with st.spinner('Running Fundamental Due Diligence...'):
     for candidat in top_15_candidats:
         ticker_str = univers_etudie[candidat]["ticker"]
-        # Les ETF et Cryptos n'ont pas de PER, on les laisse passer
         if "Crypto" in univers_etudie[candidat]["nom"] or "ETF" in univers_etudie[candidat]["nom"] or "UCITS" in univers_etudie[candidat]["nom"] or "ETC" in univers_etudie[candidat]["nom"] or "Fund" in univers_etudie[candidat]["nom"]:
             actifs_eligibles_finaux.append(candidat)
             continue
-            
         try:
             info = yf.Ticker(ticker_str).info
-            pe_ratio = info.get('trailingPE', 15) # 15 par défaut si introuvable
-            
-            if pe_ratio is None or pe_ratio < 0:
-                raisons[candidat] = "FILTRÉ FONDAMENTAL (Entreprise en perte / PER négatif)"
-            elif pe_ratio > 100:
-                raisons[candidat] = f"FILTRÉ FONDAMENTAL (Bulle de valorisation : PER > 100)"
-            else:
-                actifs_eligibles_finaux.append(candidat)
+            pe_ratio = info.get('trailingPE', 15)
+            if pe_ratio is None or pe_ratio < 0: raisons[candidat] = "FILTRÉ FONDAMENTAL (P/E Négatif)"
+            elif pe_ratio > 100: raisons[candidat] = f"FILTRÉ FONDAMENTAL (Bulle P/E > 100)"
+            else: actifs_eligibles_finaux.append(candidat)
         except:
-            actifs_eligibles_finaux.append(candidat) # Sécurité anti-crash API
+            actifs_eligibles_finaux.append(candidat) 
 
-# --- MOTEUR DE SÉLECTION FINAL ---
+# --- SÉLECTION TOP 5 ---
 top_5_actifs = []
 for candidat in actifs_eligibles_finaux:
     if len(top_5_actifs) >= 5:
@@ -204,22 +229,45 @@ for candidat in actifs_eligibles_finaux:
     if not trop_correle:
         top_5_actifs.append(candidat)
 
-# --- NOUVEAU : ALLOCATION PAR INVERSION DE MATRICE (MINIMUM VARIANCE) ---
+# --- 2. MODÈLE DE BLACK-LITTERMAN (MOTEUR BAYÉSIEN) ---
 if len(top_5_actifs) > 0:
     try:
-        # On extrait la matrice de covariance de nos 5 vainqueurs
+        tau = 0.05
         cov_matrix = rendements_hebdo[top_5_actifs].cov().values * 52
-        inv_cov = inv(cov_matrix)
-        ones = np.ones(len(top_5_actifs))
-        # Formule de Markowitz pour minimiser la variance du portefeuille
-        poids_optimaux = np.dot(inv_cov, ones) / np.dot(ones.T, np.dot(inv_cov, ones))
         
-        # Sécurité : Si l'inversion donne des poids négatifs (Short), on repasse en Risk Parity standard
-        if any(w < 0 for w in poids_optimaux):
-            vol_top5 = volatilite[top_5_actifs]
-            inv_vol = 1 / vol_top5
-            poids_optimaux = inv_vol / inv_vol.sum()
-    except:
+        # Poids d'équilibre (On utilise la Parité des Risques comme Neutral Market)
+        inv_vol_bl = 1 / volatilite[top_5_actifs].values
+        w_eq = inv_vol_bl / inv_vol_bl.sum()
+        
+        # Rendements Implicites d'Équilibre (Pi)
+        Pi = 2.5 * np.dot(cov_matrix, w_eq) # Lambda estimé à 2.5
+        
+        # Vues Quantitatives (Momentum 3 mois)
+        rendements_3m = np.log(df_actifs[top_5_actifs].iloc[-1] / df_actifs[top_5_actifs].iloc[-13]).values
+        P = np.eye(len(top_5_actifs)) # Matrice de lien
+        Q = rendements_3m * 4 # Annualisation du Momentum
+        
+        # Matrice de Confiance (Omega) - Plus la variance est haute, moins on a confiance
+        Omega = np.diag(np.diag(cov_matrix)) * tau
+        
+        # Inférence Bayésienne (Posterior Expected Returns)
+        inv_tau_cov = inv(tau * cov_matrix)
+        inv_Omega = inv(Omega)
+        
+        term1 = inv(inv_tau_cov + np.dot(np.dot(P.T, inv_Omega), P))
+        term2 = np.dot(inv_tau_cov, Pi) + np.dot(np.dot(P.T, inv_Omega), Q)
+        BL_returns = np.dot(term1, term2)
+        
+        # Optimisation Maximize Expected Return / Variance
+        inv_cov = inv(cov_matrix)
+        poids_optimaux = np.dot(inv_cov, BL_returns)
+        
+        # Nettoyage et Normalisation des poids (Pas de shorting)
+        poids_optimaux = np.clip(poids_optimaux, 0, None)
+        if poids_optimaux.sum() == 0: poids_optimaux = w_eq
+        else: poids_optimaux = poids_optimaux / poids_optimaux.sum()
+
+    except Exception as e:
         vol_top5 = volatilite[top_5_actifs]
         inv_vol = 1 / vol_top5
         poids_optimaux = inv_vol / inv_vol.sum()
@@ -232,7 +280,7 @@ else:
 st.sidebar.markdown("---")
 if len(top_5_actifs) > 0:
     csv_data = generer_csv_europe(allocations, budget, reserve_cash, regime_marche)
-    st.sidebar.download_button(label="Export Execution Order (CSV)", data=csv_data, file_name=f"Ordre_DCA_V19.csv", mime="text/csv")
+    st.sidebar.download_button(label="Export Execution Order (CSV)", data=csv_data, file_name=f"Ordre_DCA_V20.csv", mime="text/csv")
 if st.sidebar.button("Terminate Session"):
     st.session_state.authentifie = False
     st.rerun()
@@ -241,18 +289,18 @@ if st.sidebar.button("Terminate Session"):
 st.title("QUANTITATIVE ALLOCATION TERMINAL")
 
 col1, col2, col3, col4 = st.columns(4)
-couleur_regime = "normal" if regime_marche == "BULL MARKET" else "inverse"
-col1.metric("Global Trend (SMA 200)", regime_marche, delta="Risk-On" if regime_marche == "BULL MARKET" else "Risk-Off", delta_color=couleur_regime)
-col2.metric("Implied Volatility (VIX)", f"{vix_actuel:.1f}", delta="Alert" if vix_actuel > seuil_vix else "Stable", delta_color="inverse")
-col3.metric("Processed Universe", f"{len(univers_etudie)} inst.", delta="Smart Beta Filter Active")
+couleur_regime = "normal" if risk_score < 40 else "inverse"
+col1.metric("Systemic Risk Score", f"{risk_score}/100", delta=regime_marche, delta_color=couleur_regime)
+col2.metric("Yield Curve (10Y-3M)", f"{yield_curve_spread:.2f}%", delta="Inverted" if curve_inverted else "Normal", delta_color="inverse" if curve_inverted else "normal")
+col3.metric("Black-Litterman Engine", "ACTIVE", delta="Bayesian Shrinkage", delta_color="normal")
 col4.metric("Defensive Cash Reserve", f"{reserve_cash:.2f} EUR", delta=f"{pourcentage_cash*100}% exposure")
 
-tab1, tab2, tab3 = st.tabs(["ALLOCATION MATRIX", "MONTE CARLO (VaR 95%)", "COVARIANCE HEATMAP"])
+tab1, tab2, tab3 = st.tabs(["ALLOCATION MATRIX (BLACK-LITTERMAN)", "RISK & STRESS TESTS (CVaR)", "MACRO DASHBOARD"])
 
 with tab1:
-    st.markdown("*L'allocation est désormais calculée via l'inversion de la matrice de covariance (Markowitz Minimum Variance).*")
+    st.markdown("*L'allocation finale est le résultat de l'inférence bayésienne du modèle Black-Litterman combinant la Minimum Variance et les Vues Quantitatives de Momentum.*")
     donnees_tableau = []
-    actifs_a_afficher = list(dict.fromkeys(top_5_actifs + actifs_pre_eligibles[:30])) 
+    actifs_a_afficher = list(dict.fromkeys(top_5_actifs + actifs_pre_eligibles[:20])) 
     
     for actif in actifs_a_afficher:
         statut = "ALLOUÉ" if actif in top_5_actifs else raisons.get(actif, "IGNORÉ")
@@ -266,15 +314,18 @@ with tab1:
             "Instrument (Ticker)": instrument_str, 
             "Statut": statut, 
             "Sortino (Ajusté)": sortino_ajuste[actif], 
-            "Max Drawdown": max_dd[actif]*100, 
+            "Max Drawdown (5y)": max_dd[actif]*100, 
             "Volatilité": volatilite[actif]*100, 
             "Allocation (EUR)": mnt
         })
         
     df_affichage = pd.DataFrame(donnees_tableau).sort_values(by="Allocation (EUR)", ascending=False)
-    st.dataframe(df_affichage.style.format({"Sortino (Ajusté)": "{:.2f}", "Max Drawdown": "{:.1f}%", "Volatilité": "{:.1f}%", "Allocation (EUR)": "{:.2f}"}).applymap(lambda x: 'background-color: #1a4222; color: #ffffff;' if x == 'ALLOUÉ' else ('color: #ff4b4b;' if 'FONDAMENTAL' in str(x) else ''), subset=['Statut']), use_container_width=True, height=500)
+    st.dataframe(df_affichage.style.format({"Sortino (Ajusté)": "{:.2f}", "Max Drawdown (5y)": "{:.1f}%", "Volatilité": "{:.1f}%", "Allocation (EUR)": "{:.2f}"}).applymap(lambda x: 'background-color: #1a4222; color: #ffffff;' if x == 'ALLOUÉ' else ('color: #ff4b4b;' if 'FONDAMENTAL' in str(x) else ''), subset=['Statut']), use_container_width=True, height=450)
 
 with tab2:
+    st.markdown("### 3. CONDITIONAL VALUE AT RISK (CVaR 95%) & MONTE CARLO")
+    st.write("Évaluation de la perte moyenne attendue (Expected Shortfall) lors des 5% des pires scénarios de marché stochastiques.")
+    
     if len(top_5_actifs) > 0 and budget_investissable > 0:
         jours_simules = 252
         simulations = 1000
@@ -295,21 +346,31 @@ with tab2:
             
         valeur_finale = simulated_paths[-1]
         var_95 = np.percentile(valeur_finale, 5) 
-        mediane = np.percentile(valeur_finale, 50)
+        
+        # NOUVEAU : Calcul de la CVaR (Expected Shortfall)
+        cvar_95 = np.mean(valeur_finale[valeur_finale <= var_95])
         
         fig_mc = go.Figure()
         for i in range(100): fig_mc.add_trace(go.Scatter(y=simulated_paths[:, i], mode='lines', line=dict(color='rgba(100, 100, 100, 0.1)'), showlegend=False))
         fig_mc.add_hline(y=var_95, line_dash="dash", line_color="#ff4b4b", annotation_text=f"VaR 95% : {var_95:.2f} EUR")
-        fig_mc.add_hline(y=mediane, line_dash="dash", line_color="#4a90e2", annotation_text=f"Médiane : {mediane:.2f} EUR")
-        fig_mc.update_layout(title="Stochastic Future Equity Distribution", xaxis_title="Jours (T+252)", yaxis_title="Capital (EUR)", template="plotly_dark", height=500)
+        fig_mc.add_hline(y=cvar_95, line_dash="solid", line_color="#8b0000", annotation_text=f"CVaR 95% (Extreme Crash) : {cvar_95:.2f} EUR")
+        fig_mc.update_layout(title="Stochastic Future Equity Distribution (CVaR Engine)", xaxis_title="Jours (T+252)", yaxis_title="Capital (EUR)", template="plotly_dark", height=400)
         st.plotly_chart(fig_mc, use_container_width=True)
+        
+        st.error(f"**EXPECTED SHORTFALL (CVaR) :** En cas d'événement cygne noir (les 5% de pires cas absolus), la modélisation estime que la valeur résiduelle moyenne de votre allocation chutera à **{cvar_95:.2f} €**.")
     else:
         st.warning("Simulation impossible : 100% Cash.")
 
 with tab3:
-    col_heat1, col_heat2 = st.columns([1, 5]) 
-    with col_heat2:
-        top_15 = top_15_candidats # CORRECTION ICI : La variable existe bien et nourrit la matrice
-        if len(top_15) > 1:
-            fig_heat = px.imshow(correlation.loc[top_15, top_15], text_auto=".2f", color_continuous_scale="Greys", zmin=-1, zmax=1)
-            st.plotly_chart(fig_heat, use_container_width=True)
+    st.markdown("### MULTI-FACTOR REGIME DETECTION")
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.markdown("**1. Stress de Crédit Interbancaire (HYG/IEF)**")
+        st.write("Ce ratio compare les obligations risquées (Junk Bonds) aux obligations d'État sécurisées. Une chute de ce ratio indique que les institutions financières paniquent et retirent leurs liquidités des actifs risqués.")
+        df_credit = pd.DataFrame({"Ratio HYG/IEF": df_brut['Credit_Spread'].tail(252), "SMA 50": df_brut['Credit_Spread'].tail(252).rolling(50).mean()})
+        st.line_chart(df_credit)
+    with col_m2:
+        st.markdown("**2. Tendance Absolue S&P 500 (Prix vs SMA 200)**")
+        st.write("Le filtre de confirmation majeur. Si le prix passe sous la ligne, la tendance mondiale à long terme est statistiquement brisée.")
+        df_sp = pd.DataFrame({"S&P 500": df_brut['^GSPC'].tail(252), "SMA 200": df_brut['^GSPC'].rolling(200).mean().tail(252)})
+        st.line_chart(df_sp)
