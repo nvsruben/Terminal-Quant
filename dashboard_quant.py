@@ -7,12 +7,13 @@ import plotly.graph_objects as go
 from datetime import datetime
 import requests
 from scipy.linalg import inv
+from sklearn.covariance import ledoit_wolf
 import warnings
 
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="QUANTITATIVE TERMINAL V22", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="QUANTITATIVE TERMINAL V23", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # SYSTEM AUTHENTICATION
@@ -22,7 +23,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.markdown("<h1 style='text-align: center; color: #ffffff; font-family: monospace;'>QUANTITATIVE ALLOCATION DESK</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V22 PROPRIETARY ENGINE.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V23 PROPRIETARY ENGINE (LEDOIT-WOLF & FACTOR DECOMPOSITION).</p>", unsafe_allow_html=True)
     
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
     with col_login2:
@@ -79,7 +80,8 @@ for cle, donnees in mega_dict.items():
 
 @st.cache_data(ttl=3600)
 def telecharger_donnees(liste_tickers):
-    tickers_complets = liste_tickers + ['^VIX', '^TNX', '^GSPC', '^IRX', 'HYG', 'IEF']
+    # Ajout du GLD pour la décomposition de risque (Facteur Inflation/Commodity)
+    tickers_complets = liste_tickers + ['^VIX', '^TNX', '^GSPC', '^IRX', 'HYG', 'IEF', 'GLD']
     df = yf.download(tickers_complets, period="5y", progress=False)['Close']
     df = df.ffill().bfill()
     return df
@@ -107,17 +109,17 @@ if st.sidebar.button("FORCE REAL-TIME REFRESH", use_container_width=True):
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<h3 style='font-family: monospace;'>RISK PARAMETERS</h3>", unsafe_allow_html=True)
+st.sidebar.markdown("<h3 style='font-family: monospace;'>RISK & EXECUTION PARAMETERS</h3>", unsafe_allow_html=True)
 budget = st.sidebar.number_input("Capital Allocation (EUR)", min_value=10.0, value=950.0, step=10.0)
+turnover_penalty = st.sidebar.slider("Turnover Penalty (Hurdle Rate %)", 5, 30, 15, help="Exige qu'un nouvel actif batte vos favoris actuels de X% pour justifier les impôts et frais de rotation.") / 100.0
 seuil_vix = st.sidebar.slider("VIX Threshold", 15, 40, 22)
 vol_max = st.sidebar.slider("Max Weekly Volatility (%)", 30, 150, 60) / 100.0
 dd_max = st.sidebar.slider("Max Historical Drawdown (%)", -80, -10, -45) / 100.0
 correl_max = st.sidebar.slider("Covariance Rejection Limit (%)", 50, 95, 75) / 100.0
-# Hard Limit Constraint (25% max per position)
 max_weight_limit = 0.25
 
 # --- CORE ENGINE EXECUTION ---
-with st.spinner(f'Processing {len(univers_etudie)} instruments. Running Analyst Consensus Scoring...'):
+with st.spinner(f'Processing {len(univers_etudie)} instruments. Running Ledoit-Wolf Shrinkage & Z-Scoring...'):
     liste_tickers_bruts = [v["ticker"] for k, v in univers_etudie.items()]
     df_brut = telecharger_donnees(liste_tickers_bruts)
 
@@ -185,11 +187,19 @@ rendements_cumules = (1 + rendements_hebdo).cumprod()
 sommet_historique = rendements_cumules.cummax()
 drawdown = (rendements_cumules - sommet_historique) / sommet_historique
 max_dd = drawdown.min()
-correlation = rendements_hebdo.corr()
+
+# LEDOIT-WOLF SHRINKAGE (OPTIMISATION DE LA MATRICE DE COVARIANCE)
+# Lisse le "bruit" statistique pour une matrice ultra-robuste
+rendements_propres = rendements_hebdo.dropna()
+lw_cov_brut, shrinkage_penalty = ledoit_wolf(rendements_propres)
+correlation = pd.DataFrame(lw_cov_brut, index=rendements_propres.columns, columns=rendements_propres.columns).corr()
 
 sortino_ajuste = sortino_brut.copy()
+# SMART REBALANCING (TURNOVER PENALTY)
 for actif in sortino_ajuste.index:
-    if "S&P500:" in actif: sortino_ajuste[actif] = sortino_ajuste[actif] * 0.85 
+    if "S&P500:" in actif: 
+        # Les actions scannées subissent la pénalité dictée par le curseur
+        sortino_ajuste[actif] = sortino_ajuste[actif] * (1.0 - turnover_penalty) 
 
 # --- PRE-FILTERING ---
 actifs_pre_eligibles = []
@@ -206,34 +216,32 @@ for actif in univers_etudie.keys():
 
 top_20_candidats = sortino_ajuste[actifs_pre_eligibles].sort_values(ascending=False).head(20).index.tolist()
 
-# --- 2. MULTI-FACTOR Z-SCORE ENGINE (SMART BETA 3.0 + CONSENSUS) ---
+# --- 2. MULTI-FACTOR Z-SCORE ENGINE ---
 fundamentals_data = []
-with st.spinner('Compiling Analyst Consensus and Value Metrics...'):
-    for candidat in top_20_candidats:
-        ticker_str = univers_etudie[candidat]["ticker"]
-        is_etf_or_crypto = any(kw in univers_etudie[candidat]["nom"] for kw in ["Crypto", "ETF", "UCITS", "ETC", "Fund"])
+for candidat in top_20_candidats:
+    ticker_str = univers_etudie[candidat]["ticker"]
+    is_etf_or_crypto = any(kw in univers_etudie[candidat]["nom"] for kw in ["Crypto", "ETF", "UCITS", "ETC", "Fund"])
+    
+    if is_etf_or_crypto:
+        fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.15, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
+        continue
         
-        if is_etf_or_crypto:
-            fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.15, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
+    try:
+        info = yf.Ticker(ticker_str).info
+        pe = info.get('trailingPE', 15)
+        roe = info.get('returnOnEquity', 0.15)
+        consensus = info.get('recommendationMean', 3.0)
+        
+        if pe is None or pe < 0 or pe > 100:
+            raisons[candidat] = "FUNDAMENTAL REJECT (Negative/Bubble PE)"
             continue
+        if roe is None: roe = 0.10
+        if consensus is None: consensus = 3.0
             
-        try:
-            info = yf.Ticker(ticker_str).info
-            pe = info.get('trailingPE', 15)
-            roe = info.get('returnOnEquity', 0.15)
-            consensus = info.get('recommendationMean', 3.0)
-            
-            if pe is None or pe < 0 or pe > 100:
-                raisons[candidat] = "FUNDAMENTAL REJECT (Negative/Bubble PE)"
-                continue
-            if roe is None: roe = 0.10
-            if consensus is None: consensus = 3.0
-                
-            fundamentals_data.append({"Actif": candidat, "PE": pe, "ROE": roe, "Consensus": consensus, "Sortino": sortino_ajuste[candidat]})
-        except:
-            fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.10, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
+        fundamentals_data.append({"Actif": candidat, "PE": pe, "ROE": roe, "Consensus": consensus, "Sortino": sortino_ajuste[candidat]})
+    except:
+        fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.10, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
 
-# Z-Score Calculation (4 Factors)
 df_zscore = pd.DataFrame(fundamentals_data)
 if not df_zscore.empty:
     df_zscore['Z_PE'] = -calculate_z_score(df_zscore['PE']) 
@@ -261,11 +269,15 @@ for candidat in actifs_eligibles_finaux:
     if not trop_correle:
         top_5_actifs.append(candidat)
 
-# --- BLACK-LITTERMAN ALLOCATION WITH HARD CONCENTRATION LIMITS ---
+# --- BLACK-LITTERMAN ALLOCATION WITH LEDOIT-WOLF COVARIANCE ---
 if len(top_5_actifs) > 0:
     try:
         tau = 0.05
-        cov_matrix = rendements_hebdo[top_5_actifs].cov().values * 52
+        # Utilisation de la matrice Ledoit-Wolf pour Black-Litterman
+        rendements_top5 = rendements_propres[top_5_actifs]
+        lw_cov_top5, _ = ledoit_wolf(rendements_top5)
+        cov_matrix = lw_cov_top5 * 52
+        
         inv_vol_bl = 1 / volatilite[top_5_actifs].values
         w_eq = inv_vol_bl / inv_vol_bl.sum()
         
@@ -286,7 +298,6 @@ if len(top_5_actifs) > 0:
         if poids_optimaux.sum() == 0: poids_optimaux = w_eq
         else: poids_optimaux = poids_optimaux / poids_optimaux.sum()
 
-        # APPLY HARD LIMITS (25% MAX)
         while any(poids_optimaux > max_weight_limit + 1e-5):
             excess = sum(poids_optimaux[poids_optimaux > max_weight_limit] - max_weight_limit)
             poids_optimaux[poids_optimaux > max_weight_limit] = max_weight_limit
@@ -307,11 +318,32 @@ else:
 if tail_hedge_active:
     allocations["US Treasuries 20Y+"] = budget_tail_risk
 
+# --- 3. FACTOR RISK DECOMPOSITION (BETA ANALYSIS) ---
+betas = {"Equity Beta (GSPC)": [], "Duration Beta (IEF)": [], "Commodity Beta (GLD)": []}
+if len(top_5_actifs) > 0:
+    ret_market = df_brut['^GSPC'].pct_change().dropna()
+    ret_bonds = df_brut['IEF'].pct_change().dropna()
+    ret_gold = df_brut['GLD'].pct_change().dropna()
+    
+    # Construction du portefeuille théorique
+    poids_beta = (allocations[top_5_actifs] / budget_investissable).fillna(0)
+    ret_port_beta = (df_brut[ [univers_etudie[a]["ticker"] for a in top_5_actifs] ].pct_change().dropna() * poids_beta.values).sum(axis=1)
+    
+    # Alignement des dates
+    df_beta = pd.DataFrame({"Portfolio": ret_port_beta, "Market": ret_market, "Bonds": ret_bonds, "Gold": ret_gold}).dropna()
+    
+    # Calcul des Covariances / Variances (Betas)
+    beta_market = df_beta["Portfolio"].cov(df_beta["Market"]) / df_beta["Market"].var()
+    beta_bonds = df_beta["Portfolio"].cov(df_beta["Bonds"]) / df_beta["Bonds"].var()
+    beta_gold = df_beta["Portfolio"].cov(df_beta["Gold"]) / df_beta["Gold"].var()
+else:
+    beta_market = beta_bonds = beta_gold = 0.0
+
 # --- CSV EXPORT ---
 st.sidebar.markdown("---")
 if len(allocations) > 0:
     csv_data = generer_csv_europe(allocations, budget, reserve_cash, regime_marche)
-    st.sidebar.download_button(label="EXPORT EXECUTION ORDER (.CSV)", data=csv_data, file_name=f"Execution_V22.csv", mime="text/csv")
+    st.sidebar.download_button(label="EXPORT EXECUTION ORDER (.CSV)", data=csv_data, file_name=f"Execution_V23.csv", mime="text/csv")
 if st.sidebar.button("TERMINATE SESSION", use_container_width=True):
     st.session_state.authentifie = False
     st.rerun()
@@ -321,11 +353,11 @@ st.markdown("<h2 style='font-family: monospace; border-bottom: 1px solid #444; p
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("SYSTEMIC RISK SCORE", f"{risk_score}/100", delta=regime_marche, delta_color="normal" if risk_score < 40 else "inverse")
-col2.metric("MULTI-FACTOR ENGINE", "ACTIVE", delta="Val/Qual/Mom/Consensus", delta_color="normal")
-col3.metric("TAIL RISK HEDGE", "DEPLOYED" if tail_hedge_active else "STANDBY", delta="TLT 20Y+ Treasuries", delta_color="normal" if tail_hedge_active else "off")
+col2.metric("COVARIANCE ENGINE", "LEDOIT-WOLF", delta=f"Shrinkage Penalty: {shrinkage_penalty:.2f}", delta_color="normal")
+col3.metric("SMART REBALANCING", "ACTIVE", delta=f"Hurdle Rate: {turnover_penalty*100:.0f}%", delta_color="normal")
 col4.metric("DEFENSIVE CASH", f"{reserve_cash:.2f} EUR", delta=f"{pourcentage_cash*100}% exposure", delta_color="off")
 
-tab1, tab2, tab3 = st.tabs(["ALLOCATION MATRIX", "HISTORICAL STRESS TESTS", "MACRO MONITORS"])
+tab1, tab2, tab3, tab4 = st.tabs(["ALLOCATION MATRIX", "HISTORICAL STRESS TESTS", "FACTOR EXPOSURE", "MACRO MONITORS"])
 
 with tab1:
     donnees_tableau = []
@@ -364,35 +396,25 @@ with tab1:
 
 with tab2:
     st.markdown("<h4 style='font-family: monospace;'>DYNAMIC BACKCAST SIMULATION</h4>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #888;'>Simulation projetée avec exclusion dynamique des actifs sans historique (Inception Bias Correction).</p>", unsafe_allow_html=True)
-    
     if len(allocations) > 0:
         poids_test = (pd.Series(allocations) / budget).fillna(0)
         actifs_testes = poids_test[poids_test > 0].index.tolist()
         
         if len(actifs_testes) > 0:
             df_history = df_brut.copy()
-            
-            # Stress Test 1 : COVID CRASH (Fev-Avril 2020)
             df_covid_brut = df_history.loc['2020-02-15':'2020-04-30']
-            
-            # ANTI-NAN LOGIC
             actifs_valides_covid = [a for a in actifs_testes if df_covid_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
             poids_covid = poids_test[actifs_valides_covid]
             
             if len(actifs_valides_covid) > 0 and poids_covid.sum() > 0:
-                poids_covid = poids_covid / poids_covid.sum() # Renormalization
-                
-                # CORRECTION : On isole les colonnes valides AVANT de nettoyer les lignes vides
+                poids_covid = poids_covid / poids_covid.sum() 
                 colonnes_covid = [univers_etudie[a]["ticker"] for a in actifs_valides_covid] + ['^GSPC']
                 ret_covid = df_covid_brut[colonnes_covid].pct_change().dropna()
-                
                 port_covid = (ret_covid[ [univers_etudie[a]["ticker"] for a in actifs_valides_covid] ] * poids_covid.values).sum(axis=1)
                 sp_covid = ret_covid['^GSPC']
                 
                 croissance_port_covid = (1 + port_covid).cumprod() * 100
                 croissance_sp_covid = (1 + sp_covid).cumprod() * 100
-                
                 df_graph_covid = pd.DataFrame({"Proprietary Engine": croissance_port_covid, "S&P 500 Benchmark": croissance_sp_covid})
                 
                 col_st1, col_st2 = st.columns(2)
@@ -401,31 +423,24 @@ with tab2:
                     fig_covid = px.line(df_graph_covid, color_discrete_sequence=['#4a90e2', '#444444'])
                     fig_covid.update_layout(template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), xaxis_title="", yaxis_title="Base 100")
                     st.plotly_chart(fig_covid, use_container_width=True)
-                    dd_port_cov = (croissance_port_covid.min() - 100)
-                    st.caption(f"Max Drawdown Engine: **{dd_port_cov:.1f}%**")
+                    st.caption(f"Max Drawdown Engine: **{(croissance_port_covid.min() - 100):.1f}%**")
             else:
                 col_st1, col_st2 = st.columns(2)
-                with col_st1:
-                    st.warning("No allocated assets have sufficient historical data for the 2020 period.")
+                with col_st1: st.warning("No allocated assets have sufficient historical data for the 2020 period.")
                     
-            # Stress Test 2 : INFLATION SHOCK (Jan-Oct 2022)
             df_inf_brut = df_history.loc['2022-01-01':'2022-10-31']
             actifs_valides_inf = [a for a in actifs_testes if df_inf_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
             poids_inf = poids_test[actifs_valides_inf]
             
             if len(actifs_valides_inf) > 0 and poids_inf.sum() > 0:
                 poids_inf = poids_inf / poids_inf.sum()
-                
-                # CORRECTION IDENTIQUE POUR 2022 :
                 colonnes_inf = [univers_etudie[a]["ticker"] for a in actifs_valides_inf] + ['^GSPC']
                 ret_inf = df_inf_brut[colonnes_inf].pct_change().dropna()
-                
                 port_inf = (ret_inf[ [univers_etudie[a]["ticker"] for a in actifs_valides_inf] ] * poids_inf.values).sum(axis=1)
                 sp_inf = ret_inf['^GSPC']
                 
                 croissance_port_inf = (1 + port_inf).cumprod() * 100
                 croissance_sp_inf = (1 + sp_inf).cumprod() * 100
-                
                 df_graph_inf = pd.DataFrame({"Proprietary Engine": croissance_port_inf, "S&P 500 Benchmark": croissance_sp_inf})
                 
                 with col_st2:
@@ -433,16 +448,32 @@ with tab2:
                     fig_inf = px.line(df_graph_inf, color_discrete_sequence=['#4a90e2', '#444444'])
                     fig_inf.update_layout(template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), xaxis_title="", yaxis_title="")
                     st.plotly_chart(fig_inf, use_container_width=True)
-                    dd_port_inf = (croissance_port_inf.min() - 100)
-                    st.caption(f"Max Drawdown Engine: **{dd_port_inf:.1f}%**")
+                    st.caption(f"Max Drawdown Engine: **{(croissance_port_inf.min() - 100):.1f}%**")
             else:
-                with col_st2:
-                    st.warning("No allocated assets have sufficient historical data for the 2022 period.")
+                with col_st2: st.warning("No allocated assets have sufficient historical data for the 2022 period.")
     else:
         st.warning("No allocation generated.")
 
 with tab3:
-    st.markdown("<h4 style='font-family: monospace;'>SYSTEMIC RISK FACTORS</h4>", unsafe_allow_html=True)
+    st.markdown("<h4 style='font-family: monospace;'>FACTOR RISK DECOMPOSITION</h4>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #888;'>Analyse de l'exposition réelle du portefeuille généré face aux 3 vecteurs macro-économiques mondiaux (Beta).</p>", unsafe_allow_html=True)
+    
+    col_beta1, col_beta2 = st.columns([1, 2])
+    with col_beta1:
+        st.metric("Equity Beta (vs S&P 500)", f"{beta_market:.2f}", help="Si > 1.0, votre portefeuille est plus volatil que le marché.")
+        st.metric("Duration Beta (vs US Bonds)", f"{beta_bonds:.2f}", help="Si négatif, votre portefeuille souffre quand les taux montent.")
+        st.metric("Commodity Beta (vs Gold)", f"{beta_gold:.2f}", help="Exposition à l'inflation matérielle.")
+        
+    with col_beta2:
+        df_factors = pd.DataFrame({
+            "Factor": ["Global Equities (Risk-On)", "US Treasury Bonds (Rates)", "Physical Gold (Inflation)"],
+            "Beta Exposure": [beta_market, beta_bonds, beta_gold]
+        })
+        fig_bar = px.bar(df_factors, x="Beta Exposure", y="Factor", orientation='h', color="Beta Exposure", color_continuous_scale="RdBu", range_color=[-1, 1])
+        fig_bar.update_layout(template="plotly_dark", margin=dict(t=0, b=0, l=0, r=0))
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+with tab4:
     col_m1, col_m2 = st.columns(2)
     with col_m1:
         st.markdown("<span style='color: #888;'>Yield Curve (10Y - 3M Spread)</span>", unsafe_allow_html=True)
