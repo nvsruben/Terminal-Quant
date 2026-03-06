@@ -15,7 +15,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="QUANTITATIVE TERMINAL V24", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="QUANTITATIVE TERMINAL V25", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # SYSTEM AUTHENTICATION
@@ -25,7 +25,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.markdown("<h1 style='text-align: center; color: #ffffff; font-family: monospace;'>QUANTITATIVE ALLOCATION DESK</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V24 PROPRIETARY ENGINE (AI REGIMES & OMS).</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V25 (PORTFOLIO SYNC ENGINE).</p>", unsafe_allow_html=True)
     
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
     with col_login2:
@@ -40,15 +40,19 @@ if not st.session_state.authentifie:
     st.stop()
 
 # ==========================================
-# INVESTMENT UNIVERSE & TAIL RISK ASSETS
+# INVESTMENT UNIVERSE
 # ==========================================
 
 MES_FAVORIS = {
     "Bitcoin": {"ticker": "BTC-EUR", "nom": "Bitcoin (Crypto)"},
     "Ethereum": {"ticker": "ETH-EUR", "nom": "Ethereum (Crypto)"},
     "Or Physique": {"ticker": "IGLN.L", "nom": "iShares Physical Gold ETC"},
+    "Argent Physique": {"ticker": "PHAG.L", "nom": "WisdomTree Physical Silver"},
     "US Treasuries 20Y+": {"ticker": "TLT", "nom": "iShares 20+ Year Treasury Bond"},
     "Defense USD": {"ticker": "DFNS.L", "nom": "VanEck Defense UCITS"},
+    "Rheinmetall": {"ticker": "RHM.DE", "nom": "Rheinmetall AG"},
+    "Palantir": {"ticker": "PLTR", "nom": "Palantir Technologies"},
+    "Uranium USD": {"ticker": "URNM", "nom": "Sprott Uranium Miners ETF"},
     "Core S&P 500": {"ticker": "CSPX.AS", "nom": "iShares Core S&P 500 UCITS"},
     "Dassault Systèmes": {"ticker": "DSY.PA", "nom": "Dassault Systèmes SE"},
     "TotalEnergies": {"ticker": "TTE.PA", "nom": "TotalEnergies SE"},
@@ -87,6 +91,15 @@ def telecharger_donnees(liste_tickers):
     df = df.ffill().bfill()
     return df
 
+def generer_csv_europe(df_ordres):
+    date_jour = datetime.now().strftime("%d/%m/%Y")
+    en_tetes = "Date;Instrument;Action_Requise;Montant_EUR\n"
+    lignes = ""
+    for _, row in df_ordres.iterrows():
+        montant_str = str(round(abs(row["Delta"]), 2)).replace('.', ',')
+        lignes += f"{date_jour};{row['Instrument']};{row['Action']};{montant_str}\n"
+    return (en_tetes + lignes).encode('utf-8-sig')
+
 def calculate_z_score(series):
     if series.std() == 0: return np.zeros(len(series))
     return (series - series.mean()) / series.std()
@@ -98,18 +111,19 @@ if st.sidebar.button("FORCE REAL-TIME REFRESH", use_container_width=True):
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<h3 style='font-family: monospace;'>PORTFOLIO & RISK LIMITS</h3>", unsafe_allow_html=True)
-budget = st.sidebar.number_input("Total Portfolio Value (EUR)", min_value=10.0, value=950.0, step=10.0, help="Capital total ciblé (Cash + Positions Actuelles).")
-target_volatility = st.sidebar.slider("Target Annual Volatility (%)", 5, 25, 12, help="Le moteur ajustera le Cash de façon millimétrée pour ne jamais dépasser ce risque.") / 100.0
+st.sidebar.markdown("<h3 style='font-family: monospace;'>PORTFOLIO LIMITS</h3>", unsafe_allow_html=True)
+st.sidebar.info("💡 Le 'Capital Allocation' ci-dessous doit représenter la valeur TOTALE de ton compte Trade Republic (Somme des positions + ton Cash disponible).")
+budget = st.sidebar.number_input("Total Capital (EUR)", min_value=10.0, value=950.0, step=10.0)
+target_volatility = st.sidebar.slider("Target Annual Volatility (%)", 5, 25, 12) / 100.0
 turnover_penalty = st.sidebar.slider("Turnover Penalty (Hurdle Rate %)", 5, 30, 15) / 100.0
 max_weight_limit = 0.25
 
 # --- CORE ENGINE EXECUTION ---
-with st.spinner(f'Initializing Machine Learning AI. Processing {len(univers_etudie)} instruments...'):
+with st.spinner(f'Initializing Quantum AI. Processing {len(univers_etudie)} instruments...'):
     liste_tickers_bruts = [v["ticker"] for k, v in univers_etudie.items()]
     df_brut = telecharger_donnees(liste_tickers_bruts)
 
-# --- 1. UNSUPERVISED MACHINE LEARNING REGIME DETECTION (K-MEANS) ---
+# --- 1. AI REGIME DETECTION (K-MEANS) ---
 df_ml = pd.DataFrame({
     'VIX': df_brut['^VIX'],
     'Yield_Spread': df_brut['^TNX'] - df_brut['^IRX'],
@@ -119,15 +133,12 @@ df_ml = pd.DataFrame({
 
 scaler = StandardScaler()
 scaled_data = scaler.fit_transform(df_ml)
-
 kmeans = KMeans(n_clusters=3, random_state=42).fit(scaled_data)
 df_ml['Cluster'] = kmeans.labels_
 
-# AI Classification : Trouver le cluster avec le VIX le plus élevé (Bear) et le plus bas (Bull)
 cluster_vix_means = df_ml.groupby('Cluster')['VIX'].mean()
 bull_cluster = cluster_vix_means.idxmin()
 bear_cluster = cluster_vix_means.idxmax()
-
 current_cluster = kmeans.predict(scaled_data[-1].reshape(1, -1))[0]
 
 if current_cluster == bear_cluster:
@@ -174,7 +185,6 @@ raisons = {}
 for actif in univers_etudie.keys():
     if actif not in volatilite.index or pd.isna(volatilite[actif]): continue
     if actif == "US Treasuries 20Y+": continue 
-    
     vol = volatilite[actif]
     dd = max_dd[actif]
     if vol > 0.60: raisons[actif] = f"REJECTED (Vol > 60%)"
@@ -187,12 +197,11 @@ top_20_candidats = sortino_ajuste[actifs_pre_eligibles].sort_values(ascending=Fa
 fundamentals_data = []
 for candidat in top_20_candidats:
     ticker_str = univers_etudie[candidat]["ticker"]
-    is_etf_or_crypto = any(kw in univers_etudie[candidat]["nom"] for kw in ["Crypto", "ETF", "UCITS", "ETC", "Fund"])
+    is_etf_or_crypto = any(kw in univers_etudie[candidat]["nom"] for kw in ["Crypto", "ETF", "UCITS", "ETC", "Fund", "AG"])
     
     if is_etf_or_crypto:
         fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.15, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
         continue
-        
     try:
         info = yf.Ticker(ticker_str).info
         pe = info.get('trailingPE', 15)
@@ -273,10 +282,9 @@ if len(top_5_actifs) > 0:
         lw_cov_top5, _ = ledoit_wolf(rendements_propres[top_5_actifs])
         cov_matrix = lw_cov_top5 * 52
         
-    # VOLATILITY TARGETING CALCULATION
     port_vol_initial = np.sqrt(np.dot(poids_optimaux.T, np.dot(cov_matrix, poids_optimaux)))
     exposure_factor = target_volatility / port_vol_initial if port_vol_initial > 0 else 1.0
-    exposure_factor = min(1.0, exposure_factor) # Pas d'effet de levier (max 100%)
+    exposure_factor = min(1.0, exposure_factor) 
     
     pourcentage_cash = 1.0 - exposure_factor
     reserve_cash = budget * pourcentage_cash
@@ -289,81 +297,106 @@ if len(top_5_actifs) > 0:
     allocations = pd.Series(poids_optimaux * budget_investissable, index=top_5_actifs)
     if tail_hedge_active:
         allocations["US Treasuries 20Y+"] = budget_tail_risk
-
 else:
     allocations = pd.Series(dtype=float)
     reserve_cash = budget
 
-# --- FACTOR DECOMPOSITION ---
-betas = {"Equity Beta (GSPC)": 0.0, "Duration Beta (IEF)": 0.0, "Commodity Beta (GLD)": 0.0}
-if len(allocations) > 0:
-    actifs_alloues = allocations.index.tolist()
-    ret_market = df_brut['^GSPC'].pct_change().dropna()
-    ret_bonds = df_brut['IEF'].pct_change().dropna()
-    ret_gold = df_brut['GLD'].pct_change().dropna()
-    
-    poids_beta = (allocations / budget).fillna(0)
-    ret_port_beta = (df_brut[ [univers_etudie[a]["ticker"] for a in actifs_alloues] ].pct_change().dropna() * poids_beta.values).sum(axis=1)
-    
-    df_beta = pd.DataFrame({"Portfolio": ret_port_beta, "Market": ret_market, "Bonds": ret_bonds, "Gold": ret_gold}).dropna()
-    betas["Equity Beta (GSPC)"] = df_beta["Portfolio"].cov(df_beta["Market"]) / df_beta["Market"].var()
-    betas["Duration Beta (IEF)"] = df_beta["Portfolio"].cov(df_beta["Bonds"]) / df_beta["Bonds"].var()
-    betas["Commodity Beta (GLD)"] = df_beta["Portfolio"].cov(df_beta["Gold"]) / df_beta["Gold"].var()
-
-# --- MAIN DASHBOARD (INSTITUTIONAL UI) ---
+# --- MAIN DASHBOARD ---
 st.markdown("<h2 style='font-family: monospace; border-bottom: 1px solid #444; padding-bottom: 10px;'>PRIME BROKER DESK</h2>", unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("AI MARKET REGIME", regime_marche, delta="K-Means Detected", delta_color="normal" if "BULL" in regime_marche else "inverse")
+col1.metric("AI MARKET REGIME", regime_marche, delta="K-Means", delta_color="normal" if "BULL" in regime_marche else "inverse")
 col2.metric("NATIVE VOLATILITY", f"{port_vol_initial*100:.1f}%", delta=f"Target: {target_volatility*100:.1f}%", delta_color="off")
 col3.metric("TAIL RISK HEDGE", "DEPLOYED" if tail_hedge_active else "STANDBY", delta="TLT 20Y+ Treasuries", delta_color="normal" if tail_hedge_active else "off")
 col4.metric("VOL-TARGETED CASH", f"{reserve_cash:.2f} EUR", delta=f"{(reserve_cash/budget)*100:.1f}% dynamic weight", delta_color="off")
 
-tab1, tab2, tab3, tab4 = st.tabs(["ORDER MANAGEMENT SYSTEM (OMS)", "ALLOCATION MATRIX", "FACTOR EXPOSURE", "HISTORICAL STRESS TESTS"])
+tab1, tab2, tab3, tab4 = st.tabs(["ORDER MANAGEMENT SYSTEM (OMS)", "TARGET ALLOCATION MATRIX", "FACTOR EXPOSURE", "HISTORICAL STRESS TESTS"])
 
+# ==========================================
+# ⚡ L'ONGLET OMS RÉVOLUTIONNAIRE (V25) ⚡
+# ==========================================
 with tab1:
-    st.markdown("<h4 style='font-family: monospace;'>ORDER MANAGEMENT SYSTEM (DELTA CALCULATION)</h4>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #888;'>Saisissez la valeur de vos positions actuelles. Le moteur calculera l'ordre de bourse exact à exécuter pour rééquilibrer le portefeuille.</p>", unsafe_allow_html=True)
+    st.markdown("<h4 style='font-family: monospace;'>DYNAMIC ORDER MANAGEMENT SYSTEM</h4>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #888;'>Le système compare vos positions réelles avec le modèle Black-Litterman et génère les ordres d'exécution nets.</p>", unsafe_allow_html=True)
     
-    if len(allocations) > 0:
-        # Création du DataFrame interactif pour l'OMS
-        oms_data = pd.DataFrame({
-            "Target Value (EUR)": allocations.values
-        }, index=allocations.index)
+    # INJECTION MAGIQUE DE TES VRAIES DONNÉES
+    if 'mon_portefeuille' not in st.session_state:
+        st.session_state.mon_portefeuille = pd.DataFrame({
+            "Actif": ["Core S&P 500", "Bitcoin", "Or Physique", "Palantir", "Argent Physique", "Uranium USD", "Rheinmetall"],
+            "Valeur (EUR)": [401.43, 295.83, 114.86, 55.27, 42.54, 10.78, 9.47]
+        })
         
-        # Initialisation de la colonne de saisie utilisateur
-        if 'current_holdings' not in st.session_state:
-            st.session_state.current_holdings = pd.DataFrame({"Current Value (EUR)": [0.0]*len(allocations)}, index=allocations.index)
+    col_ed1, col_ed2 = st.columns([1, 1.5])
+    
+    with col_ed1:
+        st.markdown("**1. Vos Positions Actuelles (Trade Republic)**")
+        st.caption("Ajoutez (+), modifiez ou supprimez vos lignes.")
         
-        # Saisie interactive via Streamlit Data Editor
-        col_ed1, col_ed2 = st.columns([1, 2])
-        with col_ed1:
-            st.markdown("**1. Input Current TR Holdings:**")
-            edited_holdings = st.data_editor(st.session_state.current_holdings, use_container_width=True)
+        config_colonnes = {
+            "Actif": st.column_config.SelectboxColumn("Instrument Détenu", options=list(univers_etudie.keys()), required=True),
+            "Valeur (EUR)": st.column_config.NumberColumn("Valeur Actuelle (€)", min_value=0.0, step=10.0, format="%.2f")
+        }
+        
+        # Le composant Data Editor dynamique
+        df_edited = st.data_editor(
+            st.session_state.mon_portefeuille, 
+            column_config=config_colonnes, 
+            num_rows="dynamic", 
+            use_container_width=True,
+            key="editor_portefeuille"
+        )
+        st.session_state.mon_portefeuille = df_edited
+        
+        valeur_totale_investie = df_edited["Valeur (EUR)"].sum() if not df_edited.empty else 0.0
+        st.info(f"Capital actuellement investi : **{valeur_totale_investie:.2f} €**")
+
+    with col_ed2:
+        st.markdown("**2. Ticket d'Exécution Généré (Ordres Nets)**")
+        
+        if len(allocations) > 0:
+            dict_actuel = {}
+            for _, row in df_edited.iterrows():
+                if pd.notna(row["Actif"]) and row["Actif"] != "":
+                    dict_actuel[row["Actif"]] = dict_actuel.get(row["Actif"], 0.0) + row["Valeur (EUR)"]
             
-        with col_ed2:
-            st.markdown("**2. Generated Execution Tickets:**")
-            delta_df = pd.DataFrame(index=allocations.index)
-            delta_df["Target"] = oms_data["Target Value (EUR)"]
-            delta_df["Current"] = edited_holdings["Current Value (EUR)"]
-            delta_df["Order Delta (EUR)"] = delta_df["Target"] - delta_df["Current"]
+            tous_les_actifs = list(set(allocations[allocations > 0].index.tolist() + list(dict_actuel.keys())))
             
-            # Formatage conditionnel des ordres
-            def format_order(val):
-                if val > 5.0: return "BUY"
-                elif val < -5.0: return "SELL"
-                else: return "HOLD"
+            lignes_ordres = []
+            for a in tous_les_actifs:
+                val_cible = allocations.get(a, 0.0)
+                val_actuelle = dict_actuel.get(a, 0.0)
+                delta = val_cible - val_actuelle
                 
-            delta_df["Action"] = delta_df["Order Delta (EUR)"].apply(format_order)
+                # On ne déclenche un ordre que s'il est supérieur à 10€ (Frais TR)
+                if abs(delta) > 10.0: 
+                    action = "BUY" if delta > 0 else "SELL"
+                    nom_complet = univers_etudie[a]["nom"] if a in univers_etudie else a
+                    ticker = univers_etudie[a]["ticker"] if a in univers_etudie else ""
+                    
+                    lignes_ordres.append({
+                        "Instrument": f"{nom_complet} [{ticker}]",
+                        "Target": val_cible,
+                        "Current": val_actuelle,
+                        "Delta": delta,
+                        "Action": action
+                    })
             
-            # Affichage propre
-            st.dataframe(delta_df.style.format({
-                "Target": "{:.2f} €", 
-                "Current": "{:.2f} €", 
-                "Order Delta (EUR)": "{:+.2f} €"
-            }).applymap(lambda x: 'color: #00cc00;' if x == 'BUY' else ('color: #ff4b4b;' if x == 'SELL' else 'color: #888888;'), subset=['Action']), use_container_width=True)
-    else:
-        st.warning("No allocation generated.")
+            if len(lignes_ordres) > 0:
+                df_ordres = pd.DataFrame(lignes_ordres).sort_values(by="Delta", ascending=False)
+                
+                # Bouton d'export des ordres
+                csv_data = generer_csv_europe(df_ordres)
+                st.download_button(label="📥 Exporter le Ticket d'Ordres (CSV)", data=csv_data, file_name=f"Tickets_Ordres_V25.csv", mime="text/csv")
+                
+                st.dataframe(df_ordres.style.format({
+                    "Target": "{:.2f} €", 
+                    "Current": "{:.2f} €", 
+                    "Delta": "{:+.2f} €"
+                }).applymap(lambda x: 'color: #00cc00; font-weight: bold;' if x == 'BUY' else ('color: #ff4b4b; font-weight: bold;' if x == 'SELL' else ''), subset=['Action']), use_container_width=True, height=400)
+            else:
+                st.success("✅ Votre portefeuille est parfaitement aligné avec l'Intelligence Artificielle. Aucun ordre requis.")
+        else:
+            st.warning("Génération de l'allocation cible en attente...")
 
 with tab2:
     donnees_tableau = []
@@ -376,33 +409,38 @@ with tab2:
         
         mnt = allocations.get(actif, 0.0)
         instrument_str = f"{univers_etudie[actif]['nom']} [{univers_etudie[actif]['ticker']}]"
-        
         z_val = df_zscore.loc[df_zscore['Actif'] == actif, 'Global_Score'].values[0] if not df_zscore.empty and actif in df_zscore['Actif'].values else 0
         
         donnees_tableau.append({
-            "Instrument (Ticker)": instrument_str, 
-            "Status": statut, 
-            "Z-Score": f"{z_val:.2f}" if z_val != 0 else "N/A",
-            "Max Drawdown": f"{max_dd.get(actif, 0)*100:.1f}%", 
-            "Volatility": f"{volatilite.get(actif, 0)*100:.1f}%", 
-            "Target Capital": mnt
+            "Instrument (Ticker)": instrument_str, "Status": statut, "Z-Score": f"{z_val:.2f}" if z_val != 0 else "N/A",
+            "Max Drawdown": f"{max_dd.get(actif, 0)*100:.1f}%", "Volatility": f"{volatilite.get(actif, 0)*100:.1f}%", "Target Capital": mnt
         })
         
     df_affichage = pd.DataFrame(donnees_tableau).sort_values(by="Target Capital", ascending=False)
     st.dataframe(df_affichage.style.format({"Target Capital": "{:.2f} €"}).applymap(lambda x: 'background-color: #1a4222; color: #ffffff;' if x == 'ALLOCATED' else ('color: #8b0000;' if 'REJECT' in str(x) else ''), subset=['Status']), use_container_width=True, height=450)
 
 with tab3:
+    betas = {"Equity Beta (GSPC)": 0.0, "Duration Beta (IEF)": 0.0, "Commodity Beta (GLD)": 0.0}
+    if len(allocations) > 0:
+        ret_market = df_brut['^GSPC'].pct_change().dropna()
+        ret_bonds = df_brut['IEF'].pct_change().dropna()
+        ret_gold = df_brut['GLD'].pct_change().dropna()
+        
+        poids_beta = (allocations / budget).fillna(0)
+        ret_port_beta = (df_brut[ [univers_etudie[a]["ticker"] for a in allocations.index] ].pct_change().dropna() * poids_beta.values).sum(axis=1)
+        
+        df_beta = pd.DataFrame({"Portfolio": ret_port_beta, "Market": ret_market, "Bonds": ret_bonds, "Gold": ret_gold}).dropna()
+        betas["Equity Beta (GSPC)"] = df_beta["Portfolio"].cov(df_beta["Market"]) / df_beta["Market"].var()
+        betas["Duration Beta (IEF)"] = df_beta["Portfolio"].cov(df_beta["Bonds"]) / df_beta["Bonds"].var()
+        betas["Commodity Beta (GLD)"] = df_beta["Portfolio"].cov(df_beta["Gold"]) / df_beta["Gold"].var()
+
     col_beta1, col_beta2 = st.columns([1, 2])
     with col_beta1:
-        st.metric("Equity Beta (vs S&P 500)", f"{betas['Equity Beta (GSPC)']:.2f}", help="Si > 1.0, votre portefeuille est plus volatil que le marché.")
-        st.metric("Duration Beta (vs US Bonds)", f"{betas['Duration Beta (IEF)']:.2f}", help="Sensibilité aux taux d'intérêts.")
-        st.metric("Commodity Beta (vs Gold)", f"{betas['Commodity Beta (GLD)']:.2f}", help="Exposition à l'inflation matérielle.")
-        
+        st.metric("Equity Beta (vs S&P 500)", f"{betas['Equity Beta (GSPC)']:.2f}")
+        st.metric("Duration Beta (vs US Bonds)", f"{betas['Duration Beta (IEF)']:.2f}")
+        st.metric("Commodity Beta (vs Gold)", f"{betas['Commodity Beta (GLD)']:.2f}")
     with col_beta2:
-        df_factors = pd.DataFrame({
-            "Factor": ["Global Equities (Risk-On)", "US Treasury Bonds (Rates)", "Physical Gold (Inflation)"],
-            "Beta Exposure": [betas['Equity Beta (GSPC)'], betas['Duration Beta (IEF)'], betas['Commodity Beta (GLD)']]
-        })
+        df_factors = pd.DataFrame({"Factor": ["Global Equities (Risk-On)", "US Treasury Bonds (Rates)", "Physical Gold (Inflation)"], "Beta Exposure": [betas['Equity Beta (GSPC)'], betas['Duration Beta (IEF)'], betas['Commodity Beta (GLD)']]})
         fig_bar = px.bar(df_factors, x="Beta Exposure", y="Factor", orientation='h', color="Beta Exposure", color_continuous_scale="RdBu", range_color=[-1, 1])
         fig_bar.update_layout(template="plotly_dark", margin=dict(t=0, b=0, l=0, r=0))
         st.plotly_chart(fig_bar, use_container_width=True)
@@ -411,24 +449,21 @@ with tab4:
     if len(allocations) > 0:
         poids_test = (pd.Series(allocations) / budget).fillna(0)
         actifs_testes = poids_test[poids_test > 0].index.tolist()
-        
         if len(actifs_testes) > 0:
             df_history = df_brut.copy()
+            
             df_covid_brut = df_history.loc['2020-02-15':'2020-04-30']
             actifs_valides_covid = [a for a in actifs_testes if df_covid_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
             poids_covid = poids_test[actifs_valides_covid]
-            
             if len(actifs_valides_covid) > 0 and poids_covid.sum() > 0:
                 poids_covid = poids_covid / poids_covid.sum() 
                 colonnes_covid = [univers_etudie[a]["ticker"] for a in actifs_valides_covid] + ['^GSPC']
                 ret_covid = df_covid_brut[colonnes_covid].pct_change().dropna()
                 port_covid = (ret_covid[ [univers_etudie[a]["ticker"] for a in actifs_valides_covid] ] * poids_covid.values).sum(axis=1)
                 sp_covid = ret_covid['^GSPC']
-                
                 croissance_port_covid = (1 + port_covid).cumprod() * 100
                 croissance_sp_covid = (1 + sp_covid).cumprod() * 100
                 df_graph_covid = pd.DataFrame({"Proprietary Engine": croissance_port_covid, "S&P 500 Benchmark": croissance_sp_covid})
-                
                 col_st1, col_st2 = st.columns(2)
                 with col_st1:
                     st.markdown("**SCENARIO A: COVID-19 Liquidity Crisis (Feb-Apr 2020)**")
@@ -443,18 +478,15 @@ with tab4:
             df_inf_brut = df_history.loc['2022-01-01':'2022-10-31']
             actifs_valides_inf = [a for a in actifs_testes if df_inf_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
             poids_inf = poids_test[actifs_valides_inf]
-            
             if len(actifs_valides_inf) > 0 and poids_inf.sum() > 0:
                 poids_inf = poids_inf / poids_inf.sum()
                 colonnes_inf = [univers_etudie[a]["ticker"] for a in actifs_valides_inf] + ['^GSPC']
                 ret_inf = df_inf_brut[colonnes_inf].pct_change().dropna()
                 port_inf = (ret_inf[ [univers_etudie[a]["ticker"] for a in actifs_valides_inf] ] * poids_inf.values).sum(axis=1)
                 sp_inf = ret_inf['^GSPC']
-                
                 croissance_port_inf = (1 + port_inf).cumprod() * 100
                 croissance_sp_inf = (1 + sp_inf).cumprod() * 100
                 df_graph_inf = pd.DataFrame({"Proprietary Engine": croissance_port_inf, "S&P 500 Benchmark": croissance_sp_inf})
-                
                 with col_st2:
                     st.markdown("**SCENARIO B: Interest Rate Shock (Jan-Oct 2022)**")
                     fig_inf = px.line(df_graph_inf, color_discrete_sequence=['#4a90e2', '#444444'])
