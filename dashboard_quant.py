@@ -15,7 +15,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="QUANTITATIVE TERMINAL V25", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="QUANTITATIVE TERMINAL V26", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # SYSTEM AUTHENTICATION
@@ -25,7 +25,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.markdown("<h1 style='text-align: center; color: #ffffff; font-family: monospace;'>QUANTITATIVE ALLOCATION DESK</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V25 (PORTFOLIO SYNC ENGINE).</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V26 (CORE-SATELLITE ENGINE).</p>", unsafe_allow_html=True)
     
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
     with col_login2:
@@ -42,7 +42,6 @@ if not st.session_state.authentifie:
 # ==========================================
 # INVESTMENT UNIVERSE
 # ==========================================
-
 MES_FAVORIS = {
     "Bitcoin": {"ticker": "BTC-EUR", "nom": "Bitcoin (Crypto)"},
     "Ethereum": {"ticker": "ETH-EUR", "nom": "Ethereum (Crypto)"},
@@ -96,7 +95,7 @@ def generer_csv_europe(df_ordres):
     en_tetes = "Date;Instrument;Action_Requise;Montant_EUR\n"
     lignes = ""
     for _, row in df_ordres.iterrows():
-        montant_str = str(round(abs(row["Delta"]), 2)).replace('.', ',')
+        montant_str = str(round(abs(row["Order Delta (EUR)"]), 2)).replace('.', ',')
         lignes += f"{date_jour};{row['Instrument']};{row['Action']};{montant_str}\n"
     return (en_tetes + lignes).encode('utf-8-sig')
 
@@ -112,14 +111,22 @@ if st.sidebar.button("FORCE REAL-TIME REFRESH", use_container_width=True):
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='font-family: monospace;'>PORTFOLIO LIMITS</h3>", unsafe_allow_html=True)
-st.sidebar.info("💡 Le 'Capital Allocation' ci-dessous doit représenter la valeur TOTALE de ton compte Trade Republic (Somme des positions + ton Cash disponible).")
 budget = st.sidebar.number_input("Total Capital (EUR)", min_value=10.0, value=950.0, step=10.0)
 target_volatility = st.sidebar.slider("Target Annual Volatility (%)", 5, 25, 12) / 100.0
-turnover_penalty = st.sidebar.slider("Turnover Penalty (Hurdle Rate %)", 5, 30, 15) / 100.0
+min_trade_size = st.sidebar.slider("Minimum Trade Size (EUR)", 10, 100, 50, help="Évite les micro-ordres pour minimiser les frais de courtage Trade Republic.")
+turnover_penalty = st.sidebar.slider("Hurdle Rate (Turnover Penalty %)", 5, 30, 15) / 100.0
 max_weight_limit = 0.25
 
+# --- INIT PORTFOLIO STATE (CORE-SATELLITE) ---
+if 'mon_portefeuille' not in st.session_state:
+    st.session_state.mon_portefeuille = pd.DataFrame({
+        "Actif": ["Core S&P 500", "Bitcoin", "Or Physique", "Palantir", "Argent Physique", "Uranium USD", "Rheinmetall"],
+        "Valeur (EUR)": [401.43, 295.83, 114.86, 55.27, 42.54, 10.78, 9.47],
+        "🔒 Core (Ne pas vendre)": [True, True, True, False, False, False, False]
+    })
+
 # --- CORE ENGINE EXECUTION ---
-with st.spinner(f'Initializing Quantum AI. Processing {len(univers_etudie)} instruments...'):
+with st.spinner(f'Initializing Core-Satellite Architecture...'):
     liste_tickers_bruts = [v["ticker"] for k, v in univers_etudie.items()]
     df_brut = telecharger_donnees(liste_tickers_bruts)
 
@@ -176,8 +183,7 @@ correlation = pd.DataFrame(lw_cov_brut, index=rendements_propres.columns, column
 
 sortino_ajuste = sortino_brut.copy()
 for actif in sortino_ajuste.index:
-    if "S&P500:" in actif: 
-        sortino_ajuste[actif] = sortino_ajuste[actif] * (1.0 - turnover_penalty) 
+    if "S&P500:" in actif: sortino_ajuste[actif] = sortino_ajuste[actif] * (1.0 - turnover_penalty) 
 
 # --- PRE-FILTERING ---
 actifs_pre_eligibles = []
@@ -193,14 +199,18 @@ for actif in univers_etudie.keys():
 
 top_20_candidats = sortino_ajuste[actifs_pre_eligibles].sort_values(ascending=False).head(20).index.tolist()
 
-# --- 2. MULTI-FACTOR Z-SCORE ENGINE ---
+# --- 2. MULTI-FACTOR Z-SCORE ENGINE (V4.0 - TREND INCLUDED) ---
 fundamentals_data = []
 for candidat in top_20_candidats:
     ticker_str = univers_etudie[candidat]["ticker"]
     is_etf_or_crypto = any(kw in univers_etudie[candidat]["nom"] for kw in ["Crypto", "ETF", "UCITS", "ETC", "Fund", "AG"])
     
+    prix_actuel = float(df_brut[ticker_str].iloc[-1]) if ticker_str in df_brut.columns else 0
+    sma_200 = float(df_brut[ticker_str].tail(200).mean()) if ticker_str in df_brut.columns else prix_actuel
+    trend_ratio = (prix_actuel / sma_200) - 1.0 if sma_200 > 0 else 0
+    
     if is_etf_or_crypto:
-        fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.15, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
+        fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.15, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat], "Trend": trend_ratio})
         continue
     try:
         info = yf.Ticker(ticker_str).info
@@ -214,17 +224,18 @@ for candidat in top_20_candidats:
         if roe is None: roe = 0.10
         if consensus is None: consensus = 3.0
             
-        fundamentals_data.append({"Actif": candidat, "PE": pe, "ROE": roe, "Consensus": consensus, "Sortino": sortino_ajuste[candidat]})
+        fundamentals_data.append({"Actif": candidat, "PE": pe, "ROE": roe, "Consensus": consensus, "Sortino": sortino_ajuste[candidat], "Trend": trend_ratio})
     except:
-        fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.10, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
+        fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.10, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat], "Trend": trend_ratio})
 
 df_zscore = pd.DataFrame(fundamentals_data)
 if not df_zscore.empty:
     df_zscore['Z_PE'] = -calculate_z_score(df_zscore['PE']) 
     df_zscore['Z_ROE'] = calculate_z_score(df_zscore['ROE']) 
     df_zscore['Z_Sortino'] = calculate_z_score(df_zscore['Sortino'])
-    df_zscore['Z_Consensus'] = -calculate_z_score(df_zscore['Consensus']) 
-    df_zscore['Global_Score'] = df_zscore['Z_PE'].fillna(0) + df_zscore['Z_ROE'].fillna(0) + df_zscore['Z_Sortino'].fillna(0) + df_zscore['Z_Consensus'].fillna(0)
+    df_zscore['Z_Consensus'] = -calculate_z_score(df_zscore['Consensus'])
+    df_zscore['Z_Trend'] = calculate_z_score(df_zscore['Trend'])
+    df_zscore['Global_Score'] = df_zscore['Z_PE'].fillna(0) + df_zscore['Z_ROE'].fillna(0) + df_zscore['Z_Sortino'].fillna(0) + df_zscore['Z_Consensus'].fillna(0) + df_zscore['Z_Trend'].fillna(0)
     actifs_eligibles_finaux = df_zscore.sort_values(by="Global_Score", ascending=False)['Actif'].tolist()
 else:
     actifs_eligibles_finaux = []
@@ -239,11 +250,21 @@ for candidat in actifs_eligibles_finaux:
             break
     if not trop_correle: top_5_actifs.append(candidat)
 
-# --- 3. BLACK-LITTERMAN & VOLATILITY TARGETING ---
-port_vol_initial = 0.0
-allocations = pd.Series(dtype=float)
+# --- 3. CORE-SATELLITE & BLACK-LITTERMAN ALLOCATION ---
+# Calcul du capital verrouillé (Core)
+capital_verrouille = 0.0
+actifs_verrouilles = []
+if not st.session_state.mon_portefeuille.empty:
+    for _, row in st.session_state.mon_portefeuille.iterrows():
+        if row.get("🔒 Core (Ne pas vendre)", False) and row["Actif"] in univers_etudie:
+            capital_verrouille += row["Valeur (EUR)"]
+            actifs_verrouilles.append(row["Actif"])
 
-if len(top_5_actifs) > 0:
+budget_satellite = budget - capital_verrouille
+
+# Volatility Targeting (Calcul du Cash nécessaire sur le total)
+port_vol_initial = 0.0
+if len(top_5_actifs) > 0 and budget_satellite > 0:
     try:
         tau = 0.05
         rendements_top5 = rendements_propres[top_5_actifs]
@@ -288,56 +309,57 @@ if len(top_5_actifs) > 0:
     
     pourcentage_cash = 1.0 - exposure_factor
     reserve_cash = budget * pourcentage_cash
-    budget_investissable = budget * exposure_factor
+    
+    budget_satellite_ajuste = max(0, budget_satellite - reserve_cash)
     
     if tail_hedge_active:
-        budget_tail_risk = budget_investissable * 0.30
-        budget_investissable -= budget_tail_risk
+        budget_tail_risk = budget_satellite_ajuste * 0.30
+        budget_satellite_ajuste -= budget_tail_risk
         
-    allocations = pd.Series(poids_optimaux * budget_investissable, index=top_5_actifs)
-    if tail_hedge_active:
-        allocations["US Treasuries 20Y+"] = budget_tail_risk
+    allocations_satellite = pd.Series(poids_optimaux * budget_satellite_ajuste, index=top_5_actifs)
 else:
-    allocations = pd.Series(dtype=float)
-    reserve_cash = budget
+    allocations_satellite = pd.Series(dtype=float)
+    reserve_cash = budget_satellite
+    budget_tail_risk = 0
+
+# Construction de l'allocation globale (Core + Satellite)
+allocations = pd.Series(dtype=float)
+# 1. Ajout des Cores (Sanctuarisés)
+for _, row in st.session_state.mon_portefeuille.iterrows():
+    if row.get("🔒 Core (Ne pas vendre)", False) and row["Actif"] in univers_etudie:
+        allocations[row["Actif"]] = row["Valeur (EUR)"]
+# 2. Ajout des Satellites (Générés par l'IA)
+for actif, val in allocations_satellite.items():
+    allocations[actif] = allocations.get(actif, 0.0) + val
+# 3. Ajout du Tail Risk
+if tail_hedge_active:
+    allocations["US Treasuries 20Y+"] = allocations.get("US Treasuries 20Y+", 0.0) + budget_tail_risk
 
 # --- MAIN DASHBOARD ---
-st.markdown("<h2 style='font-family: monospace; border-bottom: 1px solid #444; padding-bottom: 10px;'>PRIME BROKER DESK</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='font-family: monospace; border-bottom: 1px solid #444; padding-bottom: 10px;'>PRIME BROKER DESK (CORE-SATELLITE)</h2>", unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("AI MARKET REGIME", regime_marche, delta="K-Means", delta_color="normal" if "BULL" in regime_marche else "inverse")
-col2.metric("NATIVE VOLATILITY", f"{port_vol_initial*100:.1f}%", delta=f"Target: {target_volatility*100:.1f}%", delta_color="off")
-col3.metric("TAIL RISK HEDGE", "DEPLOYED" if tail_hedge_active else "STANDBY", delta="TLT 20Y+ Treasuries", delta_color="normal" if tail_hedge_active else "off")
+col2.metric("STRATEGIC CORE", f"{capital_verrouille:.2f} EUR", delta="Locked Assets", delta_color="off")
+col3.metric("TACTICAL SATELLITE", f"{budget_satellite:.2f} EUR", delta="AI Managed", delta_color="normal")
 col4.metric("VOL-TARGETED CASH", f"{reserve_cash:.2f} EUR", delta=f"{(reserve_cash/budget)*100:.1f}% dynamic weight", delta_color="off")
 
 tab1, tab2, tab3, tab4 = st.tabs(["ORDER MANAGEMENT SYSTEM (OMS)", "TARGET ALLOCATION MATRIX", "FACTOR EXPOSURE", "HISTORICAL STRESS TESTS"])
 
-# ==========================================
-# ⚡ L'ONGLET OMS RÉVOLUTIONNAIRE (V25) ⚡
-# ==========================================
 with tab1:
-    st.markdown("<h4 style='font-family: monospace;'>DYNAMIC ORDER MANAGEMENT SYSTEM</h4>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #888;'>Le système compare vos positions réelles avec le modèle Black-Litterman et génère les ordres d'exécution nets.</p>", unsafe_allow_html=True)
-    
-    # INJECTION MAGIQUE DE TES VRAIES DONNÉES
-    if 'mon_portefeuille' not in st.session_state:
-        st.session_state.mon_portefeuille = pd.DataFrame({
-            "Actif": ["Core S&P 500", "Bitcoin", "Or Physique", "Palantir", "Argent Physique", "Uranium USD", "Rheinmetall"],
-            "Valeur (EUR)": [401.43, 295.83, 114.86, 55.27, 42.54, 10.78, 9.47]
-        })
+    st.markdown("<h4 style='font-family: monospace;'>SMART ORDER MANAGEMENT SYSTEM</h4>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #888;'>Cochez '🔒 Core' pour interdire à l'algorithme de vendre vos convictions de long terme.</p>", unsafe_allow_html=True)
         
     col_ed1, col_ed2 = st.columns([1, 1.5])
     
     with col_ed1:
-        st.markdown("**1. Vos Positions Actuelles (Trade Republic)**")
-        st.caption("Ajoutez (+), modifiez ou supprimez vos lignes.")
-        
+        st.markdown("**1. Vos Positions Actuelles**")
         config_colonnes = {
             "Actif": st.column_config.SelectboxColumn("Instrument Détenu", options=list(univers_etudie.keys()), required=True),
-            "Valeur (EUR)": st.column_config.NumberColumn("Valeur Actuelle (€)", min_value=0.0, step=10.0, format="%.2f")
+            "Valeur (EUR)": st.column_config.NumberColumn("Valeur Actuelle (€)", min_value=0.0, step=10.0, format="%.2f"),
+            "🔒 Core (Ne pas vendre)": st.column_config.CheckboxColumn("🔒 Core (Ne pas vendre)", default=False)
         }
         
-        # Le composant Data Editor dynamique
         df_edited = st.data_editor(
             st.session_state.mon_portefeuille, 
             column_config=config_colonnes, 
@@ -346,12 +368,10 @@ with tab1:
             key="editor_portefeuille"
         )
         st.session_state.mon_portefeuille = df_edited
-        
         valeur_totale_investie = df_edited["Valeur (EUR)"].sum() if not df_edited.empty else 0.0
-        st.info(f"Capital actuellement investi : **{valeur_totale_investie:.2f} €**")
 
     with col_ed2:
-        st.markdown("**2. Ticket d'Exécution Généré (Ordres Nets)**")
+        st.markdown("**2. Ticket d'Exécution Généré (Optimisé Frais)**")
         
         if len(allocations) > 0:
             dict_actuel = {}
@@ -367,44 +387,47 @@ with tab1:
                 val_actuelle = dict_actuel.get(a, 0.0)
                 delta = val_cible - val_actuelle
                 
-                # On ne déclenche un ordre que s'il est supérieur à 10€ (Frais TR)
-                if abs(delta) > 10.0: 
+                # OPTIMISATION FRAIS TR : On ignore les micro-ordres
+                if abs(delta) >= min_trade_size: 
                     action = "BUY" if delta > 0 else "SELL"
                     nom_complet = univers_etudie[a]["nom"] if a in univers_etudie else a
                     ticker = univers_etudie[a]["ticker"] if a in univers_etudie else ""
-                    
                     lignes_ordres.append({
                         "Instrument": f"{nom_complet} [{ticker}]",
                         "Target": val_cible,
                         "Current": val_actuelle,
-                        "Delta": delta,
+                        "Order Delta (EUR)": delta,
                         "Action": action
+                    })
+                elif delta != 0:
+                    nom_complet = univers_etudie[a]["nom"] if a in univers_etudie else a
+                    ticker = univers_etudie[a]["ticker"] if a in univers_etudie else ""
+                    lignes_ordres.append({
+                        "Instrument": f"{nom_complet} [{ticker}]",
+                        "Target": val_cible,
+                        "Current": val_actuelle,
+                        "Order Delta (EUR)": delta,
+                        "Action": "HOLD (Too Small)"
                     })
             
             if len(lignes_ordres) > 0:
-                df_ordres = pd.DataFrame(lignes_ordres).sort_values(by="Delta", ascending=False)
-                
-                # Bouton d'export des ordres
-                csv_data = generer_csv_europe(df_ordres)
-                st.download_button(label="📥 Exporter le Ticket d'Ordres (CSV)", data=csv_data, file_name=f"Tickets_Ordres_V25.csv", mime="text/csv")
-                
+                df_ordres = pd.DataFrame(lignes_ordres).sort_values(by="Order Delta (EUR)", ascending=False)
                 st.dataframe(df_ordres.style.format({
-                    "Target": "{:.2f} €", 
-                    "Current": "{:.2f} €", 
-                    "Delta": "{:+.2f} €"
-                }).applymap(lambda x: 'color: #00cc00; font-weight: bold;' if x == 'BUY' else ('color: #ff4b4b; font-weight: bold;' if x == 'SELL' else ''), subset=['Action']), use_container_width=True, height=400)
+                    "Target": "{:.2f} €", "Current": "{:.2f} €", "Order Delta (EUR)": "{:+.2f} €"
+                }).applymap(lambda x: 'color: #00cc00; font-weight: bold;' if x == 'BUY' else ('color: #ff4b4b; font-weight: bold;' if x == 'SELL' else 'color: #888888;'), subset=['Action']), use_container_width=True, height=400)
             else:
-                st.success("✅ Votre portefeuille est parfaitement aligné avec l'Intelligence Artificielle. Aucun ordre requis.")
+                st.success("✅ Portefeuille aligné. Aucun ordre majeur requis.")
         else:
             st.warning("Génération de l'allocation cible en attente...")
 
 with tab2:
     donnees_tableau = []
-    actifs_a_afficher = list(dict.fromkeys(top_5_actifs + top_20_candidats[:15])) 
-    if tail_hedge_active: actifs_a_afficher.insert(0, "US Treasuries 20Y+")
+    actifs_a_afficher = list(dict.fromkeys(list(allocations.index) + top_20_candidats[:15])) 
     
     for actif in actifs_a_afficher:
-        if actif in allocations.index and allocations[actif] > 0: statut = "ALLOCATED"
+        if actif in allocations.index and allocations[actif] > 0:
+            if actif in actifs_verrouilles: statut = "LOCKED (CORE)"
+            else: statut = "ALLOCATED (SATELLITE)"
         else: statut = raisons.get(actif, "REJECTED")
         
         mnt = allocations.get(actif, 0.0)
@@ -417,7 +440,14 @@ with tab2:
         })
         
     df_affichage = pd.DataFrame(donnees_tableau).sort_values(by="Target Capital", ascending=False)
-    st.dataframe(df_affichage.style.format({"Target Capital": "{:.2f} €"}).applymap(lambda x: 'background-color: #1a4222; color: #ffffff;' if x == 'ALLOCATED' else ('color: #8b0000;' if 'REJECT' in str(x) else ''), subset=['Status']), use_container_width=True, height=450)
+    
+    def styler_status(val):
+        if 'LOCKED' in str(val): return 'background-color: #2c3e50; color: #ffffff;'
+        elif 'ALLOCATED' in str(val): return 'background-color: #1a4222; color: #ffffff;'
+        elif 'REJECT' in str(val): return 'color: #8b0000;'
+        return ''
+        
+    st.dataframe(df_affichage.style.format({"Target Capital": "{:.2f} €"}).applymap(styler_status, subset=['Status']), use_container_width=True, height=450)
 
 with tab3:
     betas = {"Equity Beta (GSPC)": 0.0, "Duration Beta (IEF)": 0.0, "Commodity Beta (GLD)": 0.0}
@@ -425,14 +455,13 @@ with tab3:
         ret_market = df_brut['^GSPC'].pct_change().dropna()
         ret_bonds = df_brut['IEF'].pct_change().dropna()
         ret_gold = df_brut['GLD'].pct_change().dropna()
-        
         poids_beta = (allocations / budget).fillna(0)
         ret_port_beta = (df_brut[ [univers_etudie[a]["ticker"] for a in allocations.index] ].pct_change().dropna() * poids_beta.values).sum(axis=1)
-        
         df_beta = pd.DataFrame({"Portfolio": ret_port_beta, "Market": ret_market, "Bonds": ret_bonds, "Gold": ret_gold}).dropna()
-        betas["Equity Beta (GSPC)"] = df_beta["Portfolio"].cov(df_beta["Market"]) / df_beta["Market"].var()
-        betas["Duration Beta (IEF)"] = df_beta["Portfolio"].cov(df_beta["Bonds"]) / df_beta["Bonds"].var()
-        betas["Commodity Beta (GLD)"] = df_beta["Portfolio"].cov(df_beta["Gold"]) / df_beta["Gold"].var()
+        if not df_beta.empty:
+            betas["Equity Beta (GSPC)"] = df_beta["Portfolio"].cov(df_beta["Market"]) / df_beta["Market"].var()
+            betas["Duration Beta (IEF)"] = df_beta["Portfolio"].cov(df_beta["Bonds"]) / df_beta["Bonds"].var()
+            betas["Commodity Beta (GLD)"] = df_beta["Portfolio"].cov(df_beta["Gold"]) / df_beta["Gold"].var()
 
     col_beta1, col_beta2 = st.columns([1, 2])
     with col_beta1:
