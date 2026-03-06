@@ -9,7 +9,7 @@ import requests
 from scipy.linalg import inv
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="Terminal Quantitatif V19", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Terminal Quantitatif V19.1", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # SYSTÈME D'AUTHENTIFICATION STRICTE
@@ -19,7 +19,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.title("QUANTITATIVE ALLOCATION TERMINAL")
-    st.markdown("AUTHENTIFICATION REQUISE. ACCÈS RESTREINT (V19 - ML & Smart Beta).")
+    st.markdown("AUTHENTIFICATION REQUISE. ACCÈS RESTREINT (V19.1 - ML & Smart Beta).")
     MOT_DE_PASSE_SECRET = "BTSCG2026" 
     mdp_saisi = st.text_input("Passkey", type="password")
     if st.button("INITIALISER LA SESSION"):
@@ -309,7 +309,7 @@ with tab2:
 with tab3:
     col_heat1, col_heat2 = st.columns([1, 5]) 
     with col_heat2:
-        top_15 = sortino_eligibles.head(15).index.tolist()
+        top_15 = top_15_candidats # CORRECTION ICI : La variable existe bien et nourrit la matrice
         if len(top_15) > 1:
             fig_heat = px.imshow(correlation.loc[top_15, top_15], text_auto=".2f", color_continuous_scale="Greys", zmin=-1, zmax=1)
             st.plotly_chart(fig_heat, use_container_width=True)
