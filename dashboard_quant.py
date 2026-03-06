@@ -499,8 +499,20 @@ if not df_zscore.empty:
 else:
     actifs_eligibles_finaux = []
 
+# ==========================================
+# 4. BLACK-LITTERMAN & ALLOCATION
+# ==========================================
+actifs_verrouilles = [
+    row["Actif"] for _, row in st.session_state.mon_portefeuille.iterrows()
+    if row.get("🔒 Cœur (Ne pas vendre)", False) and row["Actif"] in univers_etudie
+]
+capital_verrouille = sum(
+    row["Valeur (EUR)"] for _, row in st.session_state.mon_portefeuille.iterrows()
+    if row.get("🔒 Cœur (Ne pas vendre)", False) and row["Actif"] in univers_etudie
+)
+budget_satellite = max(0, budget - capital_verrouille)
+
 # Nombre max d'actifs satellite adapté au budget disponible
-# Avec min_trade_size de 50€, on ne peut pas avoir plus d'actifs que budget/min_trade_size
 max_satellite_actifs = max(1, min(8, int(budget_satellite / min_trade_size))) if budget_satellite > 0 else 0
 
 top_satellite_actifs = []
@@ -518,19 +530,6 @@ for candidat in actifs_eligibles_finaux:
     if not trop_correle:
         top_satellite_actifs.append(candidat)
 
-
-# ==========================================
-# 4. BLACK-LITTERMAN & ALLOCATION
-# ==========================================
-actifs_verrouilles = [
-    row["Actif"] for _, row in st.session_state.mon_portefeuille.iterrows()
-    if row.get("🔒 Cœur (Ne pas vendre)", False) and row["Actif"] in univers_etudie
-]
-capital_verrouille = sum(
-    row["Valeur (EUR)"] for _, row in st.session_state.mon_portefeuille.iterrows()
-    if row.get("🔒 Cœur (Ne pas vendre)", False) and row["Actif"] in univers_etudie
-)
-budget_satellite = max(0, budget - capital_verrouille)
 
 port_vol_initial = 0.0
 expected_portfolio_return = 0.0
