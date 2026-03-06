@@ -150,7 +150,7 @@ if st.sidebar.button("FORCE REAL-TIME REFRESH", use_container_width=True):
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='font-family: monospace;'>PORTFOLIO LIMITS</h3>", unsafe_allow_html=True)
 budget = st.sidebar.number_input("Total Capital (EUR)", min_value=10.0, value=950.0, step=10.0)
-seuil_vix = st.sidebar.slider("VIX Threshold", 15, 40, 22) # CORRECTIF : Remis en place !
+seuil_vix = st.sidebar.slider("VIX Threshold", 15, 40, 22)
 target_volatility = st.sidebar.slider("Target Annual Volatility (%)", 5, 25, 12) / 100.0
 min_trade_size = st.sidebar.slider("Minimum Trade Size (EUR)", 10, 100, 50)
 turnover_penalty = st.sidebar.slider("Hurdle Rate (Turnover Penalty %)", 5, 30, 15) / 100.0
@@ -189,20 +189,31 @@ bull_cluster = cluster_vix_means.idxmin()
 bear_cluster = cluster_vix_means.idxmax()
 current_cluster = kmeans.predict(scaled_data[-1].reshape(1, -1))[0]
 
-# Initialisation du Risk Score via le NLP
-risk_score = 0
-if avg_nlp_score < -0.15: risk_score += 20 # Malus Panique Médiatique
-elif avg_nlp_score > 0.15: risk_score -= 10 # Bonus Euphorie
-
+# CALCUL DES VARIABLES MACRO POUR LE RESTE DU CODE
 vix_actuel = float(df_brut['^VIX'].iloc[-1])
+taux_10y = float(df_brut['^TNX'].iloc[-1])
+taux_3m = float(df_brut['^IRX'].iloc[-1])
+curve_inverted = (taux_10y - taux_3m) < 0.0
+
+df_brut['Credit_Spread'] = df_brut['HYG'] / df_brut['IEF']
+credit_spread_actuel = float(df_brut['Credit_Spread'].iloc[-1])
+credit_spread_sma50 = float(df_brut['Credit_Spread'].tail(50).mean())
+credit_stress = credit_spread_actuel < credit_spread_sma50
+
 sp500_close = float(df_brut['^GSPC'].iloc[-1])
 sp500_sma200 = float(df_brut['^GSPC'].tail(200).mean())
+
+# Initialisation du Risk Score via le NLP et les Fondamentaux
+risk_score = 0
+if avg_nlp_score < -0.15: risk_score += 20 
+elif avg_nlp_score > 0.15: risk_score -= 10 
+
 if sp500_close < sp500_sma200: risk_score += 40
-if float(df_brut['^TNX'].iloc[-1]) - float(df_brut['^IRX'].iloc[-1]) < 0.0: risk_score += 30
-if float(df_brut['HYG'].iloc[-1]/df_brut['IEF'].iloc[-1]) < float((df_brut['HYG']/df_brut['IEF']).tail(50).mean()): risk_score += 30
+if curve_inverted: risk_score += 30
+if credit_stress: risk_score += 30
 if vix_actuel > seuil_vix: risk_score += 20
 
-risk_score = max(0, min(100, risk_score)) # Bloquer entre 0 et 100
+risk_score = max(0, min(100, risk_score)) 
 
 if risk_score >= 70 or current_cluster == bear_cluster:
     regime_marche = "CRITICAL BEAR (AI & NLP)"
