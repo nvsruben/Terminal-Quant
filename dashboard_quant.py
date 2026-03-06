@@ -413,15 +413,16 @@ def calculate_z_score(series):
 # ==========================================
 # PORTEFEUILLE PAR DÉFAUT (valeurs réelles Trade Republic)
 # ==========================================
-if "mon_portefeuille" not in st.session_state:
+if "mon_portefeuille" not in st.session_state or "Valeur (EUR)" in st.session_state.mon_portefeuille.columns:
+    # Force reset si ancien format détecté
     st.session_state.mon_portefeuille = pd.DataFrame({
         "Actif": [
             "Core S&P 500", "Bitcoin", "Or Physique", "Palantir",
             "Argent Physique", "Uranium USD", "Rheinmetall",
         ],
         "Quantité": [0.72, 0.0035, 4.5, 0.65, 1.8, 0.55, 0.015],
-        "PRU Unitaire (EUR)": [557.0, 84285.0, 22.4, 84.6, 27.8, 19.6, 633.0],
-        "🔒 Cœur (Ne pas vendre)": [True, True, True, False, False, False, False],
+        "PRU / Part (EUR)": [557.0, 84285.0, 22.4, 84.6, 27.8, 19.6, 633.0],
+        "Cœur": [True, True, True, False, False, False, False],
     })
 
 # ==========================================
@@ -456,9 +457,9 @@ df_port = df_port.drop_duplicates(subset=["Actif"], keep="first")
 if "Quantité" not in df_port.columns:
     df_port["Quantité"] = 0.0
 df_port["Quantité"] = pd.to_numeric(df_port["Quantité"], errors="coerce").clip(lower=0).fillna(0)
-if "PRU Unitaire (EUR)" not in df_port.columns:
-    df_port["PRU Unitaire (EUR)"] = 0.0
-df_port["PRU Unitaire (EUR)"] = pd.to_numeric(df_port["PRU Unitaire (EUR)"], errors="coerce").clip(lower=0).fillna(0)
+if "PRU / Part (EUR)" not in df_port.columns:
+    df_port["PRU / Part (EUR)"] = 0.0
+df_port["PRU / Part (EUR)"] = pd.to_numeric(df_port["PRU / Part (EUR)"], errors="coerce").clip(lower=0).fillna(0)
 st.session_state.mon_portefeuille = df_port.reset_index(drop=True)
 
 # Budget calculé après téléchargement des données (Mark-to-Market)
@@ -500,7 +501,7 @@ for _, row in st.session_state.mon_portefeuille.iterrows():
     if pd.isna(actif) or actif not in univers_etudie:
         continue
     qty = float(row.get("Quantité", 0))
-    pru_unit = float(row.get("PRU Unitaire (EUR)", 0))
+    pru_unit = float(row.get("PRU / Part (EUR)", 0))
     val_live = valoriser_position(actif, qty, df_brut, taux_fx)
     dict_actuel[actif] = val_live
     dict_pru[actif] = qty * pru_unit  # Coût total = quantité * PRU unitaire
@@ -811,11 +812,11 @@ else:
 # ==========================================
 actifs_verrouilles = [
     row["Actif"] for _, row in st.session_state.mon_portefeuille.iterrows()
-    if row.get("🔒 Cœur (Ne pas vendre)", False) and row["Actif"] in univers_etudie
+    if row.get("Cœur", False) and row["Actif"] in univers_etudie
 ]
 capital_verrouille = sum(
     dict_actuel.get(row["Actif"], 0.0) for _, row in st.session_state.mon_portefeuille.iterrows()
-    if row.get("🔒 Cœur (Ne pas vendre)", False) and row["Actif"] in univers_etudie
+    if row.get("Cœur", False) and row["Actif"] in univers_etudie
 )
 budget_satellite = max(0, budget - capital_verrouille)
 
@@ -962,7 +963,7 @@ reserve_cash = budget_satellite * reserve_cash_pct
 allocations = pd.Series(dtype=float)
 for _, row in st.session_state.mon_portefeuille.iterrows():
     actif = row["Actif"]
-    if row.get("🔒 Cœur (Ne pas vendre)", False) and actif in univers_etudie:
+    if row.get("Cœur", False) and actif in univers_etudie:
         allocations[actif] = dict_actuel.get(actif, 0.0)
 
 for actif, val in allocations_satellite.items():
@@ -1178,124 +1179,152 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
 # ONGLET 1 : CONSEIL & EXÉCUTION
 # =================================================================
 with tab1:
-    col_ed1, col_ed2 = st.columns([1, 1.5])
-    with col_ed1:
-        st.markdown("**1. Positions — Mark-to-Market (Trade Republic)**")
+    # --- SECTION 1 : POSITIONS LIVE (pleine largeur) ---
+    st.markdown("<p class='section-header'>POSITIONS — MARK-TO-MARKET</p>", unsafe_allow_html=True)
 
-        # Préparer le DataFrame d'affichage avec valeur live
-        df_display = st.session_state.mon_portefeuille.copy()
-        df_display["Valeur Live (EUR)"] = df_display["Actif"].map(lambda a: dict_actuel.get(a, 0.0))
+    # Préparer le DataFrame d'affichage enrichi
+    df_display = st.session_state.mon_portefeuille.copy()
+    df_display["Valeur Live"] = df_display["Actif"].map(lambda a: round(dict_actuel.get(a, 0.0), 2))
+    df_display["P&L"] = df_display.apply(
+        lambda r: round(dict_actuel.get(r["Actif"], 0) - r.get("Quantité", 0) * r.get("PRU / Part (EUR)", 0), 2), axis=1
+    )
+    df_display["Poids %"] = df_display["Valeur Live"].apply(
+        lambda v: round(v / budget * 100, 1) if budget > 0 else 0
+    )
 
-        config_colonnes = {
-            "Actif": st.column_config.SelectboxColumn("Instrument", options=list(univers_etudie.keys()), required=True),
-            "Quantité": st.column_config.NumberColumn("Parts", min_value=0.0, step=0.01, format="%.4f"),
-            "PRU Unitaire (EUR)": st.column_config.NumberColumn("PRU / Part", min_value=0.0, step=0.1, format="%.2f"),
-            "Valeur Live (EUR)": st.column_config.NumberColumn("Valeur Live", format="%.2f", disabled=True),
-        }
-        df_edited = st.data_editor(
-            df_display,
-            column_config=config_colonnes, num_rows="dynamic", use_container_width=True,
-            disabled=["Valeur Live (EUR)"],
-        )
-        # Sauvegarder les colonnes éditables uniquement
-        df_edited_clean = df_edited.dropna(subset=["Actif"])
-        df_edited_clean = df_edited_clean[df_edited_clean["Actif"].isin(univers_etudie.keys())]
-        df_edited_clean = df_edited_clean.drop_duplicates(subset=["Actif"], keep="first")
-        df_edited_clean["Quantité"] = pd.to_numeric(df_edited_clean["Quantité"], errors="coerce").clip(lower=0).fillna(0)
-        if "PRU Unitaire (EUR)" not in df_edited_clean.columns:
-            df_edited_clean["PRU Unitaire (EUR)"] = 0.0
-        df_edited_clean["PRU Unitaire (EUR)"] = pd.to_numeric(df_edited_clean["PRU Unitaire (EUR)"], errors="coerce").clip(lower=0).fillna(0)
-        # Supprimer la colonne live avant sauvegarde (elle est recalculée)
-        cols_save = ["Actif", "Quantité", "PRU Unitaire (EUR)", "🔒 Cœur (Ne pas vendre)"]
-        st.session_state.mon_portefeuille = df_edited_clean[[c for c in cols_save if c in df_edited_clean.columns]].reset_index(drop=True)
+    config_colonnes = {
+        "Actif": st.column_config.SelectboxColumn("Instrument", options=list(univers_etudie.keys()), required=True, width="medium"),
+        "Quantité": st.column_config.NumberColumn("Parts", min_value=0.0, step=0.001, format="%.4f", width="small"),
+        "PRU / Part (EUR)": st.column_config.NumberColumn("PRU/Part", min_value=0.0, step=0.1, format="%.2f", width="small"),
+        "Cœur": st.column_config.CheckboxColumn("Cœur", width="small"),
+        "Valeur Live": st.column_config.NumberColumn("Valeur Live (EUR)", format="%.2f", width="small"),
+        "P&L": st.column_config.NumberColumn("P&L (EUR)", format="%.2f", width="small"),
+        "Poids %": st.column_config.NumberColumn("Poids %", format="%.1f", width="small"),
+    }
+    df_edited = st.data_editor(
+        df_display,
+        column_config=config_colonnes,
+        use_container_width=True,
+        num_rows="dynamic",
+        disabled=["Valeur Live", "P&L", "Poids %"],
+        key="portfolio_editor",
+    )
 
-        # Recalculer dict_actuel après édition (quantités peuvent avoir changé)
-        for _, row in st.session_state.mon_portefeuille.iterrows():
-            actif = row["Actif"]
-            if pd.notna(actif) and actif in univers_etudie:
-                qty = float(row.get("Quantité", 0))
-                dict_actuel[actif] = valoriser_position(actif, qty, df_brut, taux_fx)
-                dict_pru[actif] = qty * float(row.get("PRU Unitaire (EUR)", 0))
-                dict_quantite[actif] = qty
+    # Sauvegarder uniquement les colonnes éditables
+    df_edited_clean = df_edited.dropna(subset=["Actif"])
+    df_edited_clean = df_edited_clean[df_edited_clean["Actif"].isin(univers_etudie.keys())]
+    df_edited_clean = df_edited_clean.drop_duplicates(subset=["Actif"], keep="first")
+    df_edited_clean["Quantité"] = pd.to_numeric(df_edited_clean["Quantité"], errors="coerce").clip(lower=0).fillna(0)
+    if "PRU / Part (EUR)" not in df_edited_clean.columns:
+        df_edited_clean["PRU / Part (EUR)"] = 0.0
+    df_edited_clean["PRU / Part (EUR)"] = pd.to_numeric(df_edited_clean["PRU / Part (EUR)"], errors="coerce").clip(lower=0).fillna(0)
+    if "Cœur" not in df_edited_clean.columns:
+        df_edited_clean["Cœur"] = False
+    cols_save = ["Actif", "Quantité", "PRU / Part (EUR)", "Cœur"]
+    st.session_state.mon_portefeuille = df_edited_clean[[c for c in cols_save if c in df_edited_clean.columns]].reset_index(drop=True)
 
-    with col_ed2:
-        st.markdown("**2. Ticket d'Ordres — Optimisation Fiscale Active**")
-        lignes_ordres = []
-        if len(allocations) > 0:
-            tous_actifs_ordres = set(allocations[allocations > 0].index) | set(dict_actuel.keys())
-            for a in tous_actifs_ordres:
-                if a not in univers_etudie:
-                    continue
-                val_cible_raw = allocations.get(a, 0.0)
-                val_cible = float(val_cible_raw) if pd.notna(val_cible_raw) else 0.0
-                val_actuelle = float(dict_actuel.get(a, 0.0))
-                pru = float(dict_pru.get(a, val_actuelle))
-                delta = val_cible - val_actuelle
-                pnl = val_actuelle - pru
+    # Recalculer dict_actuel après édition
+    for _, row in st.session_state.mon_portefeuille.iterrows():
+        actif = row["Actif"]
+        if pd.notna(actif) and actif in univers_etudie:
+            qty = float(row.get("Quantité", 0))
+            dict_actuel[actif] = valoriser_position(actif, qty, df_brut, taux_fx)
+            dict_pru[actif] = qty * float(row.get("PRU / Part (EUR)", 0))
+            dict_quantite[actif] = qty
 
-                atr_info = atr_data.get(a, {})
-                stop_hit = atr_info.get("stop_touche", False)
-                est_verrouille = a in actifs_verrouilles
+    # Résumé compact
+    total_pnl = sum(dict_actuel.get(a, 0) - dict_pru.get(a, 0) for a in dict_actuel)
+    pnl_color = "#00c853" if total_pnl >= 0 else "#ff1744"
+    st.markdown(
+        f"<div style='display:flex; gap:40px; padding:8px 0;'>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:0.8rem; color:#6c7293;'>"
+        f"TOTAL INVESTI : <b style='color:white'>{sum(dict_pru.values()):.2f} EUR</b></span>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:0.8rem; color:#6c7293;'>"
+        f"VALEUR LIVE : <b style='color:white'>{sum(dict_actuel.values()):.2f} EUR</b></span>"
+        f"<span style='font-family:JetBrains Mono,monospace; font-size:0.8rem; color:#6c7293;'>"
+        f"P&L TOTAL : <b style='color:{pnl_color}'>{total_pnl:+.2f} EUR</b></span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
-                # ATR Stop : JAMAIS sur les positions verrouillées (Cœur)
-                if stop_hit and val_actuelle > 0 and not est_verrouille:
-                    action = "VENDRE [STOP]"
-                    delta = -val_actuelle
-                elif abs(delta) < min_trade_size:
-                    action = "CONSERVER"
-                elif delta > 0:
-                    action = "ACHETER"
-                else:
-                    action = "VENDRE"
+    st.markdown("---")
 
-                # Recalculer frais et impact fiscal APRÈS détermination du delta final
-                frais = FRAIS_ORDRE_TR + abs(delta) * SPREAD_ESTIME_TR if action != "CONSERVER" else 0.0
-                flat_tax_hit = max(0, pnl) * FLAT_TAX_FR if "VENDRE" in action else 0.0
+    # --- SECTION 2 : TICKET D'ORDRES (pleine largeur) ---
+    st.markdown("<p class='section-header'>TICKET D'ORDRES — OPTIMISATION FISCALE ACTIVE</p>", unsafe_allow_html=True)
+    lignes_ordres = []
+    if len(allocations) > 0:
+        tous_actifs_ordres = set(allocations[allocations > 0].index) | set(dict_actuel.keys())
+        for a in tous_actifs_ordres:
+            if a not in univers_etudie:
+                continue
+            val_cible_raw = allocations.get(a, 0.0)
+            val_cible = float(val_cible_raw) if pd.notna(val_cible_raw) else 0.0
+            val_actuelle = float(dict_actuel.get(a, 0.0))
+            pru = float(dict_pru.get(a, val_actuelle))
+            delta = val_cible - val_actuelle
+            pnl = val_actuelle - pru
 
-                if abs(delta) > 0.01:
-                    lignes_ordres.append({
-                        "Instrument": univers_etudie[a]["nom"],
-                        "Cible": val_cible, "Actuel": val_actuelle,
-                        "Ordre Net": delta, "P&L": pnl,
-                        "Flat Tax 30%": flat_tax_hit,
-                        "Frais TR": frais if action != "CONSERVER" else 0.0,
-                        "Action": action,
-                    })
+            atr_info = atr_data.get(a, {})
+            stop_hit = atr_info.get("stop_touche", False)
+            est_verrouille = a in actifs_verrouilles
 
-            # Tax-Loss Harvesting : trier les ventes — MV d'abord
-            ventes = [i for i, o in enumerate(lignes_ordres) if "VENDRE" in o["Action"]]
-            if len(ventes) > 1:
-                ventes_data = sorted([lignes_ordres[i] for i in ventes], key=lambda x: x["P&L"])
-                for j, i in enumerate(ventes):
-                    lignes_ordres[i] = ventes_data[j]
-
-            if lignes_ordres:
-                df_ordres = pd.DataFrame(lignes_ordres).sort_values("Ordre Net", ascending=False)
-                cols_show = ["Instrument", "Cible", "Actuel", "Ordre Net", "P&L", "Flat Tax 30%", "Frais TR", "Action"]
-                total_frais = sum(r["Frais TR"] for r in lignes_ordres if r["Action"] != "CONSERVER")
-                total_tax = sum(r["Flat Tax 30%"] for r in lignes_ordres if "VENDRE" in r["Action"])
-                eco_fisc = sum(abs(r["P&L"]) * FLAT_TAX_FR for r in lignes_ordres if "VENDRE" in r["Action"] and r["P&L"] < 0)
-                st.dataframe(
-                    df_ordres[cols_show].style.format({
-                        "Cible": "{:.2f} €", "Actuel": "{:.2f} €",
-                        "Ordre Net": "{:+.2f} €", "P&L": "{:+.2f} €",
-                        "Flat Tax 30%": "{:.2f} €", "Frais TR": "{:.2f} €",
-                    }).map(
-                        lambda x: (
-                            "color: #00c853; font-weight: bold;" if x == "ACHETER"
-                            else ("color: #ff1744; font-weight: bold;" if "VENDRE" in str(x) else "color: #6c7293;")
-                        ), subset=["Action"],
-                    ), use_container_width=True,
-                )
-                c1, c2, c3 = st.columns(3)
-                if total_frais > 0:
-                    c1.caption(f"Frais TR : **{total_frais:.2f} EUR**")
-                if total_tax > 0:
-                    c2.caption(f"Flat Tax estimee : **{total_tax:.2f} EUR**")
-                if eco_fisc > 0:
-                    c3.caption(f"Economie fiscale (vente en MV) : **{eco_fisc:.2f} EUR**")
+            if stop_hit and val_actuelle > 0 and not est_verrouille:
+                action = "VENDRE [STOP]"
+                delta = -val_actuelle
+            elif abs(delta) < min_trade_size:
+                action = "CONSERVER"
+            elif delta > 0:
+                action = "ACHETER"
             else:
-                st.success("Portefeuille optimisé. Aucun ordre nécessaire.")
+                action = "VENDRE"
+
+            frais = FRAIS_ORDRE_TR + abs(delta) * SPREAD_ESTIME_TR if action != "CONSERVER" else 0.0
+            flat_tax_hit = max(0, pnl) * FLAT_TAX_FR if "VENDRE" in action else 0.0
+
+            if abs(delta) > 0.01:
+                lignes_ordres.append({
+                    "Instrument": univers_etudie[a]["nom"],
+                    "Cible": val_cible, "Actuel": val_actuelle,
+                    "Ordre Net": delta, "P&L": pnl,
+                    "Flat Tax 30%": flat_tax_hit,
+                    "Frais TR": frais,
+                    "Action": action,
+                })
+
+        # Tax-Loss Harvesting : trier les ventes — MV d'abord
+        ventes = [i for i, o in enumerate(lignes_ordres) if "VENDRE" in o["Action"]]
+        if len(ventes) > 1:
+            ventes_data = sorted([lignes_ordres[i] for i in ventes], key=lambda x: x["P&L"])
+            for j, i in enumerate(ventes):
+                lignes_ordres[i] = ventes_data[j]
+
+    if lignes_ordres:
+        df_ordres = pd.DataFrame(lignes_ordres).sort_values("Ordre Net", ascending=False)
+        cols_show = ["Instrument", "Cible", "Actuel", "Ordre Net", "P&L", "Flat Tax 30%", "Frais TR", "Action"]
+        total_frais = sum(r["Frais TR"] for r in lignes_ordres if r["Action"] != "CONSERVER")
+        total_tax = sum(r["Flat Tax 30%"] for r in lignes_ordres if "VENDRE" in r["Action"])
+        eco_fisc = sum(abs(r["P&L"]) * FLAT_TAX_FR for r in lignes_ordres if "VENDRE" in r["Action"] and r["P&L"] < 0)
+        st.dataframe(
+            df_ordres[cols_show].style.format({
+                "Cible": "{:.2f} €", "Actuel": "{:.2f} €",
+                "Ordre Net": "{:+.2f} €", "P&L": "{:+.2f} €",
+                "Flat Tax 30%": "{:.2f} €", "Frais TR": "{:.2f} €",
+            }).map(
+                lambda x: (
+                    "color: #00c853; font-weight: bold;" if x == "ACHETER"
+                    else ("color: #ff1744; font-weight: bold;" if "VENDRE" in str(x) else "color: #6c7293;")
+                ), subset=["Action"],
+            ), use_container_width=True,
+        )
+        c1, c2, c3 = st.columns(3)
+        if total_frais > 0:
+            c1.caption(f"Frais TR : **{total_frais:.2f} EUR**")
+        if total_tax > 0:
+            c2.caption(f"Flat Tax estimee : **{total_tax:.2f} EUR**")
+        if eco_fisc > 0:
+            c3.caption(f"Economie fiscale (vente en MV) : **{eco_fisc:.2f} EUR**")
+    else:
+        st.success("Portefeuille optimisé. Aucun ordre nécessaire.")
 
     st.markdown("---")
     st.markdown("<p class='section-header'>DIAGNOSTIC — JUSTIFICATION DES RECOMMANDATIONS</p>", unsafe_allow_html=True)
