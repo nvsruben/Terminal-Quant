@@ -19,12 +19,21 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+# --- Imports optionnels avec fallback ---
+HMM_DISPONIBLE = False
+try:
+    from hmmlearn.hmm import GaussianHMM
+    HMM_DISPONIBLE = True
+except ImportError:
+    logger_temp = logging.getLogger(__name__)
+    logger_temp.info("hmmlearn non installé — module HMM désactivé")
+
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="TERMINAL QUANTITATIF V34", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="TERMINAL QUANTITATIF V35", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # CSS PROFESSIONNEL — STYLE TERMINAL
@@ -149,6 +158,12 @@ st.markdown("""
 FRAIS_ORDRE_TR = 1.0        # 1€ par ordre sur Trade Republic
 SPREAD_ESTIME_TR = 0.0015   # ~0.15% spread estimé moyen
 SEUIL_ORDRE_RENTABLE = 50   # Sous 50€, les frais mangent trop de rendement
+FLAT_TAX_FR = 0.30           # 30% PFU (Prélèvement Forfaitaire Unique)
+TAUX_CASH_TR_BRUT = 0.0375  # 3.75% brut sur cash Trade Republic
+TAUX_CASH_TR_NET = TAUX_CASH_TR_BRUT * (1 - FLAT_TAX_FR)  # ~2.625% net
+TICKER_MONETAIRE = "XEON.DE"  # Xtrackers EUR Overnight Rate Swap ETF
+ATR_PERIOD = 14               # Période pour l'Average True Range
+ATR_STOP_MULTIPLIER = 2.0     # Stop = Plus haut 6M - 2*ATR
 
 # ==========================================
 # SYSTÈME D'AUTHENTIFICATION
@@ -166,7 +181,7 @@ if not st.session_state.authentifie:
     st.markdown(
         "<p style='text-align: center; color: #6c7293; font-family: JetBrains Mono, monospace; "
         "font-size: 0.75rem; letter-spacing: 0.15em;'>"
-        "ACCES RESTREINT &mdash; V34 &mdash; ADVISORY &amp; EXECUTION</p>",
+        "ACCES RESTREINT &mdash; V35 &mdash; ADVISORY &amp; EXECUTION</p>",
         unsafe_allow_html=True,
     )
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
@@ -304,6 +319,61 @@ def obtenir_fondamentaux(ticker_str: str) -> dict:
         return {}
 
 
+@st.cache_data(ttl=86400)
+def calculer_atr_et_stop(ticker_str: str, period: int = ATR_PERIOD) -> dict:
+    """Calcule l'ATR et le Trailing Stop pour un actif."""
+    try:
+        data = yf.download(ticker_str, period="1y", progress=False)
+        if data.empty or len(data) < period + 1:
+            return {"atr": None, "stop": None, "prix": None, "stop_touche": False}
+        high = data["High"].values.flatten() if data["High"].ndim > 1 else data["High"].values
+        low = data["Low"].values.flatten() if data["Low"].ndim > 1 else data["Low"].values
+        close = data["Close"].values.flatten() if data["Close"].ndim > 1 else data["Close"].values
+        tr = np.maximum(high[1:] - low[1:],
+                        np.maximum(abs(high[1:] - close[:-1]), abs(low[1:] - close[:-1])))
+        atr = float(np.mean(tr[-period:]))
+        plus_haut_6m = float(np.max(high[-126:]))
+        prix_actuel = float(close[-1])
+        stop = plus_haut_6m - ATR_STOP_MULTIPLIER * atr
+        return {
+            "atr": atr,
+            "stop": stop,
+            "prix": prix_actuel,
+            "plus_haut_6m": plus_haut_6m,
+            "stop_touche": prix_actuel < stop,
+        }
+    except Exception as e:
+        logger.warning(f"ATR échoué pour {ticker_str}: {e}")
+        return {"atr": None, "stop": None, "prix": None, "stop_touche": False}
+
+
+@st.cache_data(ttl=86400)
+def detecter_insider_buying(ticker_str: str) -> dict:
+    """Détecte les achats d'insiders récents via yfinance."""
+    try:
+        tk = yf.Ticker(ticker_str)
+        insiders = tk.get_insider_purchases()
+        if insiders is None or insiders.empty:
+            return {"signal": False, "detail": "Pas de données insider", "bonus_zscore": 0.0}
+        # Chercher des achats significatifs
+        if "Shares" in insiders.columns:
+            total_achats = insiders["Shares"].sum()
+        elif "shares" in insiders.columns:
+            total_achats = insiders["shares"].sum()
+        else:
+            return {"signal": False, "detail": "Format inconnu", "bonus_zscore": 0.0}
+        if total_achats > 0:
+            return {
+                "signal": True,
+                "detail": f"Achats insiders detectes ({total_achats:,.0f} titres)",
+                "bonus_zscore": 1.0,
+            }
+        return {"signal": False, "detail": "Aucun achat recent", "bonus_zscore": 0.0}
+    except Exception as e:
+        logger.debug(f"Insider data indisponible pour {ticker_str}: {e}")
+        return {"signal": False, "detail": "API indisponible", "bonus_zscore": 0.0}
+
+
 @st.cache_data(ttl=3600)
 def analyser_sentiment_nlp():
     try:
@@ -350,6 +420,7 @@ if "mon_portefeuille" not in st.session_state:
             "Argent Physique", "Uranium USD", "Rheinmetall",
         ],
         "Valeur (EUR)": [401.00, 295.00, 114.00, 55.00, 42.00, 10.00, 9.00],
+        "PRU (EUR)": [402.00, 298.00, 101.00, 71.00, 50.00, 12.00, 12.00],
         "🔒 Cœur (Ne pas vendre)": [True, True, True, False, False, False, False],
     })
 
@@ -364,7 +435,7 @@ if st.sidebar.button("FORCER L'ACTUALISATION EN DIRECT", use_container_width=Tru
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='font-family: monospace;'>PARAMÈTRES DU PORTEFEUILLE</h3>", unsafe_allow_html=True)
 
-# [V34] Le capital est calculé automatiquement depuis les positions
+# [V35] Le capital est calculé automatiquement depuis les positions
 st.sidebar.markdown("*Le capital est calculé depuis vos positions.*")
 
 seuil_vix = st.sidebar.slider("Seuil d'Alerte VIX (Panique)", 15, 40, 22)
@@ -375,12 +446,15 @@ turnover_penalty = st.sidebar.slider("Pénalité de Rotation (%)", 5, 30, 15) / 
 correl_max = st.sidebar.slider("Limite de Corrélation Max (%)", 50, 95, 75) / 100.0
 max_weight_limit = 0.25
 
-# [V34] Validation du portefeuille AVANT tout calcul (fixe le bug V31)
+# [V35] Validation du portefeuille AVANT tout calcul (fixe le bug V31)
 df_port = st.session_state.mon_portefeuille.copy()
 df_port = df_port.dropna(subset=["Actif"])
 df_port = df_port[df_port["Actif"].isin(univers_etudie.keys())]
 df_port = df_port.drop_duplicates(subset=["Actif"], keep="first")
 df_port["Valeur (EUR)"] = df_port["Valeur (EUR)"].clip(lower=0).fillna(0)
+if "PRU (EUR)" not in df_port.columns:
+    df_port["PRU (EUR)"] = df_port["Valeur (EUR)"]
+df_port["PRU (EUR)"] = df_port["PRU (EUR)"].clip(lower=0).fillna(0)
 st.session_state.mon_portefeuille = df_port.reset_index(drop=True)
 
 # Capital calculé automatiquement
@@ -472,6 +546,59 @@ elif risk_score >= 40:
     dynamic_correl_max = min(correl_max, 0.70)
 else:
     dynamic_correl_max = correl_max
+
+
+# ==========================================
+# 1b. MODELE DE MARKOV CACHE (HMM) — Anticipation Macro
+# ==========================================
+hmm_proba_krach = 0.0
+hmm_transmat = None
+hmm_regime_actuel = -1
+hmm_regime_names = {0: "BULL", 1: "NEUTRE", 2: "BEAR"}
+
+if HMM_DISPONIBLE:
+    try:
+        # Features hebdomadaires pour le HMM
+        hmm_features = pd.DataFrame({
+            "VIX": df_brut["^VIX"],
+            "Spread_Taux": df_brut["^TNX"] - df_brut["^IRX"],
+            "SP500_Ret": df_brut["^GSPC"].pct_change(),
+            "Credit": df_brut["HYG"] / df_brut["IEF"],
+        }).dropna().resample("W-FRI").last().dropna()
+
+        hmm_scaler = StandardScaler()
+        hmm_data = hmm_scaler.fit_transform(hmm_features)
+
+        hmm_model = GaussianHMM(
+            n_components=3, covariance_type="full",
+            n_iter=200, random_state=42, tol=0.01,
+        )
+        hmm_model.fit(hmm_data)
+
+        # Identifier quel état = Bear (VIX moyen le plus élevé)
+        hmm_states = hmm_model.predict(hmm_data)
+        hmm_features_copy = hmm_features.iloc[:len(hmm_states)].copy()
+        hmm_features_copy["State"] = hmm_states
+        state_vix_mean = hmm_features_copy.groupby("State")["VIX"].mean()
+        bear_state = state_vix_mean.idxmax()
+        bull_state = state_vix_mean.idxmin()
+        neutral_state = [s for s in range(3) if s != bear_state and s != bull_state][0]
+
+        hmm_regime_names = {bull_state: "BULL", neutral_state: "NEUTRE", bear_state: "BEAR"}
+        hmm_regime_actuel = hmm_states[-1]
+
+        # Matrice de transition
+        hmm_transmat = hmm_model.transmat_
+
+        # Probabilité de basculer en Bear la semaine prochaine
+        hmm_proba_krach = float(hmm_transmat[hmm_regime_actuel, bear_state])
+
+        logger.info(f"HMM — Régime actuel: {hmm_regime_names.get(hmm_regime_actuel, '?')}, "
+                     f"P(Bear semaine prochaine): {hmm_proba_krach:.1%}")
+
+    except Exception as e:
+        logger.warning(f"HMM échoué : {e}")
+        hmm_proba_krach = 0.0
 
 
 # ==========================================
@@ -598,13 +725,26 @@ for candidat in top_20_candidats:
         if cons_raw is not None:
             consensus = cons_raw
 
+    # Détection insider buying (actions individuelles uniquement)
+    insider_bonus = 0.0
+    if not is_etf:
+        insider_info = detecter_insider_buying(ticker_str)
+        insider_bonus = insider_info.get("bonus_zscore", 0.0)
+
     fundamentals_data.append({
         "Actif": candidat,
         "P/E": pe, "ROE": roe, "Consensus": consensus,
         "Sortino": sortino_ajuste.get(candidat, 0.0),
         "Tendance": trend_ratio,
         "Pred_ML": ml_predictions.get(candidat, 0.0),
+        "Insider_Bonus": insider_bonus,
     })
+
+# Calcul ATR et Trailing Stop pour chaque actif du portefeuille
+atr_data = {}
+for actif in st.session_state.mon_portefeuille["Actif"].tolist():
+    if actif in univers_etudie:
+        atr_data[actif] = calculer_atr_et_stop(univers_etudie[actif]["ticker"])
 
 df_zscore = pd.DataFrame(fundamentals_data)
 if not df_zscore.empty:
@@ -615,6 +755,7 @@ if not df_zscore.empty:
         - calculate_z_score(df_zscore["Consensus"]).fillna(0)
         + calculate_z_score(df_zscore["Tendance"]).fillna(0)
         + calculate_z_score(df_zscore["Pred_ML"]).fillna(0)
+        + df_zscore["Insider_Bonus"].fillna(0)  # Bonus direct (pas Z-normalisé)
     )
     actifs_eligibles_finaux = df_zscore.sort_values("Score_Global", ascending=False)["Actif"].tolist()
 else:
@@ -801,7 +942,7 @@ if len(allocations) > 1:
 
 
 # ==========================================
-# 6. BILAN DE SANTÉ PAR POSITION (nouveau V34)
+# 6. BILAN DE SANTÉ PAR POSITION (nouveau V35)
 # ==========================================
 def calculer_sante_position(actif_nom, rendements, vol, mdd, corr_matrix, df_prix, taux, all_actifs_port):
     """Calcule un diagnostic complet pour une position du portefeuille."""
@@ -948,27 +1089,33 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric(
-    "MÉTÉO DU MARCHÉ (IA)", regime_marche,
+    "METEO MARCHE (IA)", regime_marche,
     delta=f"Score Risque: {risk_score}/100",
     delta_color="normal" if risk_score < 40 else "inverse",
 )
+hmm_label = f"{hmm_proba_krach:.0%}" if HMM_DISPONIBLE else "N/A"
 col2.metric(
-    "POIDS CŒUR (SÉCURISÉ)", f"{capital_verrouille:.2f} €",
-    delta="Sanctuarisé", delta_color="off",
+    "PROBA KRACH HMM", hmm_label,
+    delta=f"Regime: {hmm_regime_names.get(hmm_regime_actuel, '?')}" if HMM_DISPONIBLE else "hmmlearn requis",
+    delta_color="inverse" if hmm_proba_krach > 0.20 else "normal",
 )
 col3.metric(
-    "POIDS SATELLITE (ACTIF)", f"{budget_satellite:.2f} €",
-    delta="Géré par l'IA", delta_color="normal",
+    "COEUR SECURISE", f"{capital_verrouille:.2f} €",
+    delta="Sanctuarise", delta_color="off",
+)
+col4.metric(
+    "SATELLITE ACTIF", f"{budget_satellite:.2f} €",
+    delta="Gere par l'IA", delta_color="normal",
 )
 reserve_pct_display = (reserve_cash / budget * 100) if budget > 0 else 0
-col4.metric(
-    "LIQUIDITÉS RECOMMANDÉES", f"{reserve_cash:.2f} €",
-    delta=f"{reserve_pct_display:.1f}% de protection", delta_color="off",
+col5.metric(
+    "LIQUIDITES", f"{reserve_cash:.2f} €",
+    delta=f"{reserve_pct_display:.1f}% protection", delta_color="off",
 )
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "CONSEIL & EXECUTION",
     "ALLOCATION CIBLE",
     "BILAN DE SANTE",
@@ -976,6 +1123,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "PROJECTIONS MONTE CARLO",
     "ASSISTANT DCA",
     "BACKTEST WALK-FORWARD",
+    "MACRO & IA",
     "ANALYSE PCA",
     "STRESS-TESTS",
 ])
@@ -990,24 +1138,32 @@ with tab1:
         st.markdown("**1. Vos Positions Actuelles (Trade Republic)**")
         config_colonnes = {
             "Actif": st.column_config.SelectboxColumn("Instrument", options=list(univers_etudie.keys()), required=True),
-            "Valeur (EUR)": st.column_config.NumberColumn("Valeur Actuelle (€)", min_value=0.0, step=1.0, format="%.2f"),
+            "Valeur (EUR)": st.column_config.NumberColumn("Valeur Actuelle", min_value=0.0, step=1.0, format="%.2f"),
+            "PRU (EUR)": st.column_config.NumberColumn("Prix de Revient", min_value=0.0, step=1.0, format="%.2f"),
         }
         df_edited = st.data_editor(
             st.session_state.mon_portefeuille,
             column_config=config_colonnes, num_rows="dynamic", use_container_width=True,
         )
-        # Appliquer les éditions pour le prochain rerun
         df_edited_clean = df_edited.dropna(subset=["Actif"])
         df_edited_clean = df_edited_clean[df_edited_clean["Actif"].isin(univers_etudie.keys())]
         df_edited_clean = df_edited_clean.drop_duplicates(subset=["Actif"], keep="first")
         df_edited_clean["Valeur (EUR)"] = df_edited_clean["Valeur (EUR)"].clip(lower=0).fillna(0)
+        if "PRU (EUR)" not in df_edited_clean.columns:
+            df_edited_clean["PRU (EUR)"] = df_edited_clean["Valeur (EUR)"]
+        df_edited_clean["PRU (EUR)"] = df_edited_clean["PRU (EUR)"].clip(lower=0).fillna(0)
         st.session_state.mon_portefeuille = df_edited_clean.reset_index(drop=True)
 
     with col_ed2:
-        st.markdown("**2. Le Ticket d'Ordres de l'IA**")
+        st.markdown("**2. Ticket d'Ordres — Optimisation Fiscale Active**")
         lignes_ordres = []
         dict_actuel = {
             row["Actif"]: row["Valeur (EUR)"]
+            for _, row in st.session_state.mon_portefeuille.iterrows()
+            if pd.notna(row["Actif"])
+        }
+        dict_pru = {
+            row["Actif"]: row.get("PRU (EUR)", row["Valeur (EUR)"])
             for _, row in st.session_state.mon_portefeuille.iterrows()
             if pd.notna(row["Actif"])
         }
@@ -1019,11 +1175,19 @@ with tab1:
                 val_cible_raw = allocations.get(a, 0.0)
                 val_cible = float(val_cible_raw) if pd.notna(val_cible_raw) else 0.0
                 val_actuelle = float(dict_actuel.get(a, 0.0))
+                pru = float(dict_pru.get(a, val_actuelle))
                 delta = val_cible - val_actuelle
+                pnl = val_actuelle - pru
+                flat_tax_hit = max(0, pnl) * FLAT_TAX_FR if delta < 0 else 0.0
 
-                # Frais TR : ordre rentable seulement si |delta| > seuil
-                frais_total = FRAIS_ORDRE_TR + abs(delta) * SPREAD_ESTIME_TR
-                if abs(delta) < min_trade_size:
+                atr_info = atr_data.get(a, {})
+                stop_hit = atr_info.get("stop_touche", False)
+
+                frais = FRAIS_ORDRE_TR + abs(delta) * SPREAD_ESTIME_TR
+                if stop_hit and val_actuelle > 0:
+                    action = "VENDRE [STOP]"
+                    delta = -val_actuelle
+                elif abs(delta) < min_trade_size:
                     action = "CONSERVER"
                 elif delta > 0:
                     action = "ACHETER"
@@ -1033,31 +1197,45 @@ with tab1:
                 if abs(delta) > 0.01:
                     lignes_ordres.append({
                         "Instrument": univers_etudie[a]["nom"],
-                        "Cible": val_cible,
-                        "Actuel": val_actuelle,
-                        "Ordre Net (EUR)": delta,
-                        "Frais TR": frais_total if action != "CONSERVER" else 0.0,
+                        "Cible": val_cible, "Actuel": val_actuelle,
+                        "Ordre Net": delta, "P&L": pnl,
+                        "Flat Tax 30%": flat_tax_hit,
+                        "Frais TR": frais if action != "CONSERVER" else 0.0,
                         "Action": action,
                     })
 
+            # Tax-Loss Harvesting : trier les ventes — MV d'abord
+            ventes = [i for i, o in enumerate(lignes_ordres) if "VENDRE" in o["Action"]]
+            if len(ventes) > 1:
+                ventes_data = sorted([lignes_ordres[i] for i in ventes], key=lambda x: x["P&L"])
+                for j, i in enumerate(ventes):
+                    lignes_ordres[i] = ventes_data[j]
+
             if lignes_ordres:
-                df_ordres = pd.DataFrame(lignes_ordres).sort_values("Ordre Net (EUR)", ascending=False)
+                df_ordres = pd.DataFrame(lignes_ordres).sort_values("Ordre Net", ascending=False)
+                cols_show = ["Instrument", "Cible", "Actuel", "Ordre Net", "P&L", "Flat Tax 30%", "Frais TR", "Action"]
                 total_frais = sum(r["Frais TR"] for r in lignes_ordres if r["Action"] != "CONSERVER")
+                total_tax = sum(r["Flat Tax 30%"] for r in lignes_ordres if "VENDRE" in r["Action"])
+                eco_fisc = sum(abs(r["P&L"]) * FLAT_TAX_FR for r in lignes_ordres if "VENDRE" in r["Action"] and r["P&L"] < 0)
                 st.dataframe(
-                    df_ordres.style.format({
+                    df_ordres[cols_show].style.format({
                         "Cible": "{:.2f} €", "Actuel": "{:.2f} €",
-                        "Ordre Net (EUR)": "{:+.2f} €", "Frais TR": "{:.2f} €",
+                        "Ordre Net": "{:+.2f} €", "P&L": "{:+.2f} €",
+                        "Flat Tax 30%": "{:.2f} €", "Frais TR": "{:.2f} €",
                     }).map(
                         lambda x: (
-                            "color: #00cc00; font-weight: bold;" if x == "ACHETER"
-                            else ("color: #ff4b4b; font-weight: bold;" if x == "VENDRE" else "color: #888888;")
-                        ),
-                        subset=["Action"],
-                    ),
-                    use_container_width=True,
+                            "color: #00c853; font-weight: bold;" if x == "ACHETER"
+                            else ("color: #ff1744; font-weight: bold;" if "VENDRE" in str(x) else "color: #6c7293;")
+                        ), subset=["Action"],
+                    ), use_container_width=True,
                 )
+                c1, c2, c3 = st.columns(3)
                 if total_frais > 0:
-                    st.caption(f"Coût total estimé des ordres sur Trade Republic : **{total_frais:.2f} €** (frais 1€/ordre + spread ~0.15%)")
+                    c1.caption(f"Frais TR : **{total_frais:.2f} EUR**")
+                if total_tax > 0:
+                    c2.caption(f"Flat Tax estimee : **{total_tax:.2f} EUR**")
+                if eco_fisc > 0:
+                    c3.caption(f"Economie fiscale (vente en MV) : **{eco_fisc:.2f} EUR**")
             else:
                 st.success("Portefeuille optimisé. Aucun ordre nécessaire.")
 
@@ -1158,7 +1336,7 @@ with tab2:
 
 
 # =================================================================
-# ONGLET 3 : BILAN DE SANTÉ (nouveau V34)
+# ONGLET 3 : BILAN DE SANTÉ (nouveau V35)
 # =================================================================
 with tab3:
     st.markdown("<p class='section-header'>DIAGNOSTIC INDIVIDUEL PAR POSITION</p>", unsafe_allow_html=True)
@@ -1186,7 +1364,24 @@ with tab3:
                 c5.metric("Au-dessus SMA 200j", sma200_txt)
                 c6.metric("Au-dessus SMA 50j", sma50_txt)
                 c7.metric("Distance SMA 200j", f"{sp['distance_sma200_pct']:+.1f}%")
-                c8.metric("Corrél. moy. portefeuille", f"{sp['correlation_moyenne']:.2f}")
+                c8.metric("Correl. moy. portefeuille", f"{sp['correlation_moyenne']:.2f}")
+
+                # ATR Trailing Stop + Insider
+                atr_info = atr_data.get(sp["actif"], {})
+                insider_info_display = detecter_insider_buying(sp["ticker"]) if not est_etf_ou_crypto(univers_etudie.get(sp["actif"], {}).get("nom", "")) else {"signal": False, "detail": "N/A (ETF)"}
+
+                c9, c10, c11, c12 = st.columns(4)
+                if atr_info.get("atr") is not None:
+                    c9.metric("ATR (14j)", f"{atr_info['atr']:.2f}")
+                    stop_val = atr_info.get("stop", 0)
+                    stop_status = "DECLENCHE" if atr_info.get("stop_touche") else f"{stop_val:.2f}"
+                    c10.metric("Trailing Stop (2xATR)", stop_status, delta_color="inverse" if atr_info.get("stop_touche") else "off")
+                else:
+                    c9.metric("ATR (14j)", "N/A")
+                    c10.metric("Trailing Stop", "N/A")
+                insider_txt = "ACHATS DETECTES" if insider_info_display.get("signal") else "Aucun signal"
+                c11.metric("Signal Insider", insider_txt)
+                c12.metric("Detail", insider_info_display.get("detail", "")[:30])
 
                 # Graphique de l'actif (6 mois)
                 ticker = sp["ticker"]
@@ -1205,7 +1400,7 @@ with tab3:
 
 
 # =================================================================
-# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V34)
+# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V35)
 # =================================================================
 with tab4:
     st.markdown("### MATRICE DE CORRELATION de votre Portefeuille")
@@ -1254,7 +1449,7 @@ with tab4:
 
 
 # =================================================================
-# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V34)
+# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V35)
 # =================================================================
 with tab5:
     st.markdown("### PROJECTIONS MONTE CARLO de votre portefeuille")
@@ -1350,7 +1545,7 @@ with tab5:
 
 
 # =================================================================
-# ONGLET 6 : ASSISTANT DCA (nouveau V34)
+# ONGLET 6 : ASSISTANT DCA (nouveau V35)
 # =================================================================
 with tab6:
     st.markdown("### ASSISTANT DCA — ALLOCATION DU PROCHAIN INVESTISSEMENT")
@@ -1442,7 +1637,7 @@ with tab6:
 
 
 # =================================================================
-# ONGLET 7 : BACKTEST WALK-FORWARD (nouveau V34)
+# ONGLET 7 : BACKTEST WALK-FORWARD (nouveau V35)
 # =================================================================
 with tab7:
     st.markdown("### BACKTEST WALK-FORWARD — PERFORMANCE HISTORIQUE DE LA STRATEGIE")
@@ -1556,9 +1751,108 @@ with tab7:
 
 
 # =================================================================
-# ONGLET 8 : ANALYSE PCA
+# ONGLET 8 : MACRO & IA (HMM + Smart Cash + Telegram)
 # =================================================================
 with tab8:
+    st.markdown("### ANALYSE MACRO — MODELE DE MARKOV CACHE (HMM)")
+
+    if HMM_DISPONIBLE and hmm_transmat is not None:
+        col_hmm1, col_hmm2 = st.columns([1, 1.5])
+        with col_hmm1:
+            st.metric("Regime HMM actuel", hmm_regime_names.get(hmm_regime_actuel, "?"))
+            st.metric("Probabilite de Krach (1 semaine)", f"{hmm_proba_krach:.1%}")
+            st.markdown("<p class='section-header'>MATRICE DE TRANSITION</p>", unsafe_allow_html=True)
+            st.markdown("*Probabilite de passer d'un etat a l'autre la semaine prochaine.*")
+
+            # Tableau de la matrice de transition
+            labels = [hmm_regime_names.get(i, f"Etat {i}") for i in range(3)]
+            df_trans = pd.DataFrame(hmm_transmat, index=labels, columns=labels)
+            st.dataframe(df_trans.style.format("{:.1%}").background_gradient(cmap="RdYlGn_r", vmin=0, vmax=0.5), use_container_width=True)
+
+        with col_hmm2:
+            # Heatmap de la matrice de transition
+            fig_trans = go.Figure(data=go.Heatmap(
+                z=hmm_transmat,
+                x=labels, y=labels,
+                colorscale="RdYlGn_r", zmin=0, zmax=1,
+                text=np.round(hmm_transmat * 100, 1),
+                texttemplate="%{text}%",
+                textfont={"size": 14},
+            ))
+            fig_trans.update_layout(
+                template="plotly_dark", height=350,
+                margin=dict(t=10, b=10, l=10, r=10),
+                xaxis_title="Vers", yaxis_title="Depuis",
+            )
+            st.plotly_chart(fig_trans, use_container_width=True)
+    else:
+        st.warning("Module HMM inactif. Installez `hmmlearn` dans requirements.txt : `pip install hmmlearn`")
+
+    st.markdown("---")
+
+    # MODULE 4 : Smart Cash
+    st.markdown("<p class='section-header'>SMART CASH — OPTIMISATION DES LIQUIDITES</p>", unsafe_allow_html=True)
+    if reserve_cash > 0:
+        try:
+            xeon = yf.download(TICKER_MONETAIRE, period="1y", progress=False)["Close"]
+            if not xeon.empty and len(xeon) > 20:
+                xeon_clean = xeon.values.flatten() if xeon.ndim > 1 else xeon.values
+                rdt_xeon_brut = float((xeon_clean[-1] / xeon_clean[-252] - 1)) if len(xeon_clean) >= 252 else float((xeon_clean[-1] / xeon_clean[0] - 1))
+                rdt_xeon_net = rdt_xeon_brut * (1 - FLAT_TAX_FR)
+                col_sc1, col_sc2, col_sc3 = st.columns(3)
+                col_sc1.metric("Cash non investi", f"{reserve_cash:.2f} EUR")
+                col_sc2.metric(f"Rdt {TICKER_MONETAIRE} net", f"{rdt_xeon_net*100:.2f}%", delta=f"Brut: {rdt_xeon_brut*100:.2f}%")
+                col_sc3.metric("Rdt Cash TR net", f"{TAUX_CASH_TR_NET*100:.2f}%", delta=f"Brut: {TAUX_CASH_TR_BRUT*100:.2f}%")
+                if reserve_cash >= 500:
+                    if rdt_xeon_net > TAUX_CASH_TR_NET:
+                        st.success(f"RECOMMANDATION : Placer {reserve_cash:.0f} EUR sur {TICKER_MONETAIRE} (rendement net superieur de {(rdt_xeon_net-TAUX_CASH_TR_NET)*100:.2f}% vs cash TR)")
+                    else:
+                        st.info(f"Le cash TR a {TAUX_CASH_TR_BRUT*100:.1f}% brut est actuellement plus avantageux que {TICKER_MONETAIRE}. Gardez vos liquidites sur TR.")
+                else:
+                    st.info(f"Avec {reserve_cash:.0f} EUR de liquidites, le maintien sur cash TR est optimal (frais d'ordre non rentables).")
+            else:
+                st.info("Donnees XEON indisponibles.")
+        except Exception as e:
+            logger.warning(f"Smart Cash echoue : {e}")
+            st.info("Analyse Smart Cash indisponible.")
+    else:
+        st.info("Aucune liquidite a optimiser.")
+
+    st.markdown("---")
+
+    # MODULE 4b : Telegram Sentinel Bot
+    st.markdown("<p class='section-header'>SENTINEL BOT — ALERTES TELEGRAM</p>", unsafe_allow_html=True)
+    col_tg1, col_tg2 = st.columns(2)
+    tg_token = col_tg1.text_input("Telegram Bot Token", type="password", key="tg_token")
+    tg_chat_id = col_tg2.text_input("Chat ID", key="tg_chat")
+    if st.button("POUSSER L'ALERTE", use_container_width=False, key="tg_send"):
+        if tg_token and tg_chat_id:
+            resume = (
+                f"[TERMINAL QUANT V35]\n"
+                f"Regime: {regime_marche}\n"
+                f"Score Risque: {risk_score}/100\n"
+                f"VIX: {vix_actuel:.1f}\n"
+                f"HMM P(Krach): {hmm_proba_krach:.0%}\n"
+                f"Capital: {budget:.0f} EUR\n"
+                f"Liquidites: {reserve_cash:.0f} EUR"
+            )
+            try:
+                url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+                resp = requests.get(url, params={"chat_id": tg_chat_id, "text": resume}, timeout=10)
+                if resp.status_code == 200:
+                    st.success("Alerte envoyee sur Telegram.")
+                else:
+                    st.error(f"Erreur Telegram : {resp.status_code}")
+            except Exception as e:
+                st.error(f"Connexion Telegram echouee : {e}")
+        else:
+            st.warning("Renseignez le Bot Token et Chat ID.")
+
+
+# =================================================================
+# ONGLET 9 : ANALYSE PCA
+# =================================================================
+with tab9:
     col_pca1, col_pca2 = st.columns([1, 1.5])
     with col_pca1:
         st.markdown("**Analyse en Composantes Principales (PCA)**")
@@ -1606,7 +1900,7 @@ with tab8:
 # =================================================================
 # ONGLET 9 : STRESS-TESTS
 # =================================================================
-with tab9:
+with tab10:
     if len(allocations) > 0:
         poids_test = (pd.Series(allocations) / budget).fillna(0)
         actifs_testes = poids_test[poids_test > 0].index.tolist()
@@ -1670,7 +1964,7 @@ with tab9:
 # --- Footer ---
 st.markdown("---")
 st.caption(
-    f"Terminal Quantitatif V34 (Mode DCA · Trade Republic) — "
+    f"Terminal Quantitatif V35 (Mode DCA · Trade Republic) — "
     f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} — "
     f"Taux FX : 1 EUR = {1/taux_fx.get('USD', 1):.4f} USD, "
     f"1 EUR = {1/taux_fx.get('GBP', 1):.4f} GBP — "
