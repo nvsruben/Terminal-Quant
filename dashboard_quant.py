@@ -12,7 +12,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="QUANTITATIVE TERMINAL V21", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="QUANTITATIVE TERMINAL V22", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # SYSTEM AUTHENTICATION
@@ -22,7 +22,7 @@ if "authentifie" not in st.session_state:
 
 if not st.session_state.authentifie:
     st.markdown("<h1 style='text-align: center; color: #ffffff; font-family: monospace;'>QUANTITATIVE ALLOCATION DESK</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V21 PROPRIETARY ENGINE.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888888; font-family: monospace;'>RESTRICTED ACCESS. V22 PROPRIETARY ENGINE.</p>", unsafe_allow_html=True)
     
     col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
     with col_login2:
@@ -44,7 +44,7 @@ MES_FAVORIS = {
     "Bitcoin": {"ticker": "BTC-EUR", "nom": "Bitcoin (Crypto)"},
     "Ethereum": {"ticker": "ETH-EUR", "nom": "Ethereum (Crypto)"},
     "Or Physique": {"ticker": "IGLN.L", "nom": "iShares Physical Gold ETC"},
-    "US Treasuries 20Y+": {"ticker": "TLT", "nom": "iShares 20+ Year Treasury Bond"}, # TAIL RISK HEDGE
+    "US Treasuries 20Y+": {"ticker": "TLT", "nom": "iShares 20+ Year Treasury Bond"},
     "Defense USD": {"ticker": "DFNS.L", "nom": "VanEck Defense UCITS"},
     "Core S&P 500": {"ticker": "CSPX.AS", "nom": "iShares Core S&P 500 UCITS"},
     "Dassault Systèmes": {"ticker": "DSY.PA", "nom": "Dassault Systèmes SE"},
@@ -97,6 +97,7 @@ def generer_csv_europe(allocations, budget_total, reserve_cash, regime_txt):
     return (en_tetes + lignes).encode('utf-8-sig')
 
 def calculate_z_score(series):
+    if series.std() == 0: return np.zeros(len(series))
     return (series - series.mean()) / series.std()
 
 # --- SIDEBAR CONTROL PANEL ---
@@ -112,9 +113,11 @@ seuil_vix = st.sidebar.slider("VIX Threshold", 15, 40, 22)
 vol_max = st.sidebar.slider("Max Weekly Volatility (%)", 30, 150, 60) / 100.0
 dd_max = st.sidebar.slider("Max Historical Drawdown (%)", -80, -10, -45) / 100.0
 correl_max = st.sidebar.slider("Covariance Rejection Limit (%)", 50, 95, 75) / 100.0
+# New Limit Constraint
+max_weight_limit = 0.25
 
 # --- CORE ENGINE EXECUTION ---
-with st.spinner(f'Processing {len(univers_etudie)} instruments. Running Multi-Factor Z-Scoring...'):
+with st.spinner(f'Processing {len(univers_etudie)} instruments. Running Analyst Consensus Scoring...'):
     liste_tickers_bruts = [v["ticker"] for k, v in univers_etudie.items()]
     df_brut = telecharger_donnees(liste_tickers_bruts)
 
@@ -141,12 +144,11 @@ if curve_inverted: risk_score += 30
 if credit_stress: risk_score += 30
 if vix_actuel > seuil_vix: risk_score = min(100, risk_score + 20)
 
-# TAIL RISK LOGIC
 tail_hedge_active = False
 if risk_score >= 70:
     regime_marche = "CRITICAL BEAR MARKET"
     pourcentage_cash = 0.40 
-    tail_hedge_active = True # We will force 40% into TLT
+    tail_hedge_active = True 
 elif risk_score >= 40:
     regime_marche = "DEFENSIVE REGIME"
     pourcentage_cash = 0.40
@@ -162,7 +164,7 @@ budget_investissable = budget - reserve_cash
 
 if tail_hedge_active:
     budget_tail_risk = budget * 0.40
-    budget_investissable = budget - reserve_cash - budget_tail_risk # Only 20% left for Alpha
+    budget_investissable = budget - reserve_cash - budget_tail_risk 
 
 # --- DATA PREPARATION ---
 df_hebdo = df_brut.resample('W-FRI').last()
@@ -194,7 +196,6 @@ actifs_pre_eligibles = []
 raisons = {}
 for actif in univers_etudie.keys():
     if actif not in volatilite.index or pd.isna(volatilite[actif]): continue
-    # Ignore TLT here, it's handled by Tail Risk module
     if actif == "US Treasuries 20Y+": continue 
     
     vol = volatilite[actif]
@@ -205,38 +206,41 @@ for actif in univers_etudie.keys():
 
 top_20_candidats = sortino_ajuste[actifs_pre_eligibles].sort_values(ascending=False).head(20).index.tolist()
 
-# --- 2. MULTI-FACTOR Z-SCORE ENGINE (SMART BETA 2.0) ---
+# --- 2. MULTI-FACTOR Z-SCORE ENGINE (SMART BETA 3.0 + CONSENSUS) ---
 fundamentals_data = []
-with st.spinner('Running Fundamental Z-Score Engine (Value & Quality)...'):
+with st.spinner('Compiling Analyst Consensus and Value Metrics...'):
     for candidat in top_20_candidats:
         ticker_str = univers_etudie[candidat]["ticker"]
         is_etf_or_crypto = any(kw in univers_etudie[candidat]["nom"] for kw in ["Crypto", "ETF", "UCITS", "ETC", "Fund"])
         
         if is_etf_or_crypto:
-            fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.15, "Sortino": sortino_ajuste[candidat]})
+            fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.15, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
             continue
             
         try:
             info = yf.Ticker(ticker_str).info
             pe = info.get('trailingPE', 15)
             roe = info.get('returnOnEquity', 0.15)
+            consensus = info.get('recommendationMean', 3.0) # 1=Strong Buy, 5=Strong Sell
             
             if pe is None or pe < 0 or pe > 100:
                 raisons[candidat] = "FUNDAMENTAL REJECT (Negative/Bubble PE)"
                 continue
             if roe is None: roe = 0.10
+            if consensus is None: consensus = 3.0
                 
-            fundamentals_data.append({"Actif": candidat, "PE": pe, "ROE": roe, "Sortino": sortino_ajuste[candidat]})
+            fundamentals_data.append({"Actif": candidat, "PE": pe, "ROE": roe, "Consensus": consensus, "Sortino": sortino_ajuste[candidat]})
         except:
-            fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.10, "Sortino": sortino_ajuste[candidat]})
+            fundamentals_data.append({"Actif": candidat, "PE": 15.0, "ROE": 0.10, "Consensus": 3.0, "Sortino": sortino_ajuste[candidat]})
 
-# Z-Score Calculation
+# Z-Score Calculation (4 Factors)
 df_zscore = pd.DataFrame(fundamentals_data)
 if not df_zscore.empty:
-    df_zscore['Z_PE'] = -calculate_z_score(df_zscore['PE']) # Inverse car un PE bas est mieux (Value)
-    df_zscore['Z_ROE'] = calculate_z_score(df_zscore['ROE']) # Un ROE haut est mieux (Quality)
-    df_zscore['Z_Sortino'] = calculate_z_score(df_zscore['Sortino']) # Momentum ajusté
-    df_zscore['Global_Score'] = df_zscore['Z_PE'].fillna(0) + df_zscore['Z_ROE'].fillna(0) + df_zscore['Z_Sortino'].fillna(0)
+    df_zscore['Z_PE'] = -calculate_z_score(df_zscore['PE']) 
+    df_zscore['Z_ROE'] = calculate_z_score(df_zscore['ROE']) 
+    df_zscore['Z_Sortino'] = calculate_z_score(df_zscore['Sortino'])
+    df_zscore['Z_Consensus'] = -calculate_z_score(df_zscore['Consensus']) # Inverse car bas = achat fort
+    df_zscore['Global_Score'] = df_zscore['Z_PE'].fillna(0) + df_zscore['Z_ROE'].fillna(0) + df_zscore['Z_Sortino'].fillna(0) + df_zscore['Z_Consensus'].fillna(0)
     
     actifs_eligibles_finaux = df_zscore.sort_values(by="Global_Score", ascending=False)['Actif'].tolist()
 else:
@@ -257,7 +261,7 @@ for candidat in actifs_eligibles_finaux:
     if not trop_correle:
         top_5_actifs.append(candidat)
 
-# --- BLACK-LITTERMAN ALLOCATION ---
+# --- BLACK-LITTERMAN ALLOCATION WITH HARD CONCENTRATION LIMITS ---
 if len(top_5_actifs) > 0:
     try:
         tau = 0.05
@@ -281,6 +285,17 @@ if len(top_5_actifs) > 0:
         poids_optimaux = np.clip(poids_optimaux, 0, None)
         if poids_optimaux.sum() == 0: poids_optimaux = w_eq
         else: poids_optimaux = poids_optimaux / poids_optimaux.sum()
+
+        # APPLY HARD LIMITS (25% MAX)
+        while any(poids_optimaux > max_weight_limit + 1e-5):
+            excess = sum(poids_optimaux[poids_optimaux > max_weight_limit] - max_weight_limit)
+            poids_optimaux[poids_optimaux > max_weight_limit] = max_weight_limit
+            mask = poids_optimaux < max_weight_limit
+            if sum(mask) > 0:
+                poids_optimaux[mask] += excess * (poids_optimaux[mask] / sum(poids_optimaux[mask]))
+            else:
+                break
+                
     except Exception as e:
         vol_top5 = volatilite[top_5_actifs]
         poids_optimaux = (1/vol_top5) / (1/vol_top5).sum()
@@ -289,7 +304,6 @@ if len(top_5_actifs) > 0:
 else:
     allocations = pd.Series(dtype=float)
 
-# TAIL RISK OVERRIDE
 if tail_hedge_active:
     allocations["US Treasuries 20Y+"] = budget_tail_risk
 
@@ -297,7 +311,7 @@ if tail_hedge_active:
 st.sidebar.markdown("---")
 if len(allocations) > 0:
     csv_data = generer_csv_europe(allocations, budget, reserve_cash, regime_marche)
-    st.sidebar.download_button(label="EXPORT EXECUTION ORDER (.CSV)", data=csv_data, file_name=f"Execution_V21.csv", mime="text/csv")
+    st.sidebar.download_button(label="EXPORT EXECUTION ORDER (.CSV)", data=csv_data, file_name=f"Execution_V22.csv", mime="text/csv")
 if st.sidebar.button("TERMINATE SESSION", use_container_width=True):
     st.session_state.authentifie = False
     st.rerun()
@@ -307,7 +321,7 @@ st.markdown("<h2 style='font-family: monospace; border-bottom: 1px solid #444; p
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("SYSTEMIC RISK SCORE", f"{risk_score}/100", delta=regime_marche, delta_color="normal" if risk_score < 40 else "inverse")
-col2.metric("MULTI-FACTOR ENGINE", "ACTIVE", delta="Value/Quality Z-Score", delta_color="normal")
+col2.metric("MULTI-FACTOR ENGINE", "ACTIVE", delta="Val/Qual/Mom/Consensus", delta_color="normal")
 col3.metric("TAIL RISK HEDGE", "DEPLOYED" if tail_hedge_active else "STANDBY", delta="TLT 20Y+ Treasuries", delta_color="normal" if tail_hedge_active else "off")
 col4.metric("DEFENSIVE CASH", f"{reserve_cash:.2f} EUR", delta=f"{pourcentage_cash*100}% exposure", delta_color="off")
 
@@ -327,40 +341,49 @@ with tab1:
         ticker = univers_etudie[actif]["ticker"]
         instrument_str = f"{nom_precis} [{ticker}]"
         
-        # Format Z-Score if available
         z_score_display = "N/A"
+        rec_display = "N/A"
         if not df_zscore.empty and actif in df_zscore['Actif'].values:
             z_val = df_zscore.loc[df_zscore['Actif'] == actif, 'Global_Score'].values[0]
+            rec_val = df_zscore.loc[df_zscore['Actif'] == actif, 'Consensus'].values[0]
             z_score_display = f"{z_val:.2f}"
+            rec_display = f"{rec_val:.1f}/5.0"
             
         donnees_tableau.append({
             "Instrument (Ticker)": instrument_str, 
             "Status": statut, 
-            "Z-Score (Smart Beta)": z_score_display,
-            "Max Drawdown (5y)": max_dd[actif]*100, 
-            "Volatility": volatilite[actif]*100, 
+            "Z-Score": z_score_display,
+            "Analyst Rec": rec_display,
+            "Max Drawdown": f"{max_dd[actif]*100:.1f}%", 
+            "Volatility": f"{volatilite[actif]*100:.1f}%", 
             "Capital (EUR)": mnt
         })
         
     df_affichage = pd.DataFrame(donnees_tableau).sort_values(by="Capital (EUR)", ascending=False)
-    st.dataframe(df_affichage.style.format({"Max Drawdown (5y)": "{:.1f}%", "Volatility": "{:.1f}%", "Capital (EUR)": "{:.2f}"}).applymap(lambda x: 'background-color: #1a4222; color: #ffffff;' if x == 'ALLOCATED' else ('color: #8b0000;' if 'REJECT' in str(x) else ''), subset=['Status']), use_container_width=True, height=450)
+    st.dataframe(df_affichage.style.format({"Capital (EUR)": "{:.2f}"}).applymap(lambda x: 'background-color: #1a4222; color: #ffffff;' if x == 'ALLOCATED' else ('color: #8b0000;' if 'REJECT' in str(x) else ''), subset=['Status']), use_container_width=True, height=450)
 
 with tab2:
-    st.markdown("<h4 style='font-family: monospace;'>HISTORICAL REGIME STRESS TESTING</h4>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #888;'>Projection de l'allocation Black-Litterman actuelle sur les krachs historiques majeurs pour évaluer la résilience structurelle (Look-back simulation).</p>", unsafe_allow_html=True)
+    st.markdown("<h4 style='font-family: monospace;'>DYNAMIC BACKCAST SIMULATION</h4>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #888;'>Simulation projetée avec exclusion dynamique des actifs sans historique (Inception Bias Correction).</p>", unsafe_allow_html=True)
     
     if len(allocations) > 0:
         poids_test = (pd.Series(allocations) / budget).fillna(0)
         actifs_testes = poids_test[poids_test > 0].index.tolist()
         
         if len(actifs_testes) > 0:
-            df_history = df_brut[ [univers_etudie[a]["ticker"] for a in actifs_testes] + ['^GSPC'] ].dropna()
+            df_history = df_brut.copy()
             
             # Stress Test 1 : COVID CRASH (Fev-Avril 2020)
-            try:
-                df_covid = df_history.loc['2020-02-15':'2020-04-30']
-                ret_covid = df_covid.pct_change().dropna()
-                port_covid = (ret_covid[ [univers_etudie[a]["ticker"] for a in actifs_testes] ] * poids_test[actifs_testes].values).sum(axis=1)
+            df_covid_brut = df_history.loc['2020-02-15':'2020-04-30']
+            
+            # ANTI-NAN LOGIC (Exclusion des actifs trop récents)
+            actifs_valides_covid = [a for a in actifs_testes if df_covid_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
+            poids_covid = poids_test[actifs_valides_covid]
+            
+            if len(actifs_valides_covid) > 0 and poids_covid.sum() > 0:
+                poids_covid = poids_covid / poids_covid.sum() # Renormalization to 100%
+                ret_covid = df_covid_brut.pct_change().dropna()
+                port_covid = (ret_covid[ [univers_etudie[a]["ticker"] for a in actifs_valides_covid] ] * poids_covid.values).sum(axis=1)
                 sp_covid = ret_covid['^GSPC']
                 
                 croissance_port_covid = (1 + port_covid).cumprod() * 100
@@ -376,11 +399,20 @@ with tab2:
                     st.plotly_chart(fig_covid, use_container_width=True)
                     dd_port_cov = (croissance_port_covid.min() - 100)
                     st.caption(f"Max Drawdown Engine: **{dd_port_cov:.1f}%**")
+            else:
+                col_st1, col_st2 = st.columns(2)
+                with col_st1:
+                    st.warning("No allocated assets have sufficient historical data for the 2020 period.")
                     
-                # Stress Test 2 : INFLATION SHOCK (Jan-Oct 2022)
-                df_inf = df_history.loc['2022-01-01':'2022-10-31']
-                ret_inf = df_inf.pct_change().dropna()
-                port_inf = (ret_inf[ [univers_etudie[a]["ticker"] for a in actifs_testes] ] * poids_test[actifs_testes].values).sum(axis=1)
+            # Stress Test 2 : INFLATION SHOCK (Jan-Oct 2022)
+            df_inf_brut = df_history.loc['2022-01-01':'2022-10-31']
+            actifs_valides_inf = [a for a in actifs_testes if df_inf_brut[univers_etudie[a]["ticker"]].isna().sum() < 5]
+            poids_inf = poids_test[actifs_valides_inf]
+            
+            if len(actifs_valides_inf) > 0 and poids_inf.sum() > 0:
+                poids_inf = poids_inf / poids_inf.sum()
+                ret_inf = df_inf_brut.pct_change().dropna()
+                port_inf = (ret_inf[ [univers_etudie[a]["ticker"] for a in actifs_valides_inf] ] * poids_inf.values).sum(axis=1)
                 sp_inf = ret_inf['^GSPC']
                 
                 croissance_port_inf = (1 + port_inf).cumprod() * 100
@@ -389,14 +421,15 @@ with tab2:
                 df_graph_inf = pd.DataFrame({"Proprietary Engine": croissance_port_inf, "S&P 500 Benchmark": croissance_sp_inf})
                 
                 with col_st2:
-                    st.markdown("**SCENARIO B: Interest Rate Shock / Bear Market (Jan-Oct 2022)**")
+                    st.markdown("**SCENARIO B: Interest Rate Shock (Jan-Oct 2022)**")
                     fig_inf = px.line(df_graph_inf, color_discrete_sequence=['#4a90e2', '#444444'])
                     fig_inf.update_layout(template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), xaxis_title="", yaxis_title="")
                     st.plotly_chart(fig_inf, use_container_width=True)
                     dd_port_inf = (croissance_port_inf.min() - 100)
                     st.caption(f"Max Drawdown Engine: **{dd_port_inf:.1f}%**")
-            except:
-                st.warning("Insufficient historical data to run full 2020/2022 stress tests on currently selected assets.")
+            else:
+                with col_st2:
+                    st.warning("No allocated assets have sufficient historical data for the 2022 period.")
     else:
         st.warning("No allocation generated.")
 
