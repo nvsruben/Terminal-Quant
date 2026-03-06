@@ -387,36 +387,7 @@ st.session_state.mon_portefeuille = df_port.reset_index(drop=True)
 budget = float(df_port["Valeur (EUR)"].sum())
 st.sidebar.metric("Capital Total Calculé", f"{budget:.2f} €")
 
-# ==========================================
-# SYSTEME D'ALERTES (nouveau V34)
-# ==========================================
-st.sidebar.markdown("---")
-st.sidebar.markdown("<h3 style='font-family: monospace;'>ALERTES ACTIVES</h3>", unsafe_allow_html=True)
-
-alertes = []
-if vix_actuel > seuil_vix:
-    alertes.append(("CRITIQUE", f"VIX a {vix_actuel:.1f} > seuil {seuil_vix}"))
-if risk_score >= 70:
-    alertes.append(("CRITIQUE", f"Score risque {risk_score}/100 — regime krach"))
-elif risk_score >= 40:
-    alertes.append(("ATTENTION", f"Score risque {risk_score}/100 — regime defensif"))
-if curve_inverted:
-    alertes.append(("ATTENTION", "Courbe des taux inversee"))
-if credit_stress:
-    alertes.append(("ATTENTION", "Stress sur le credit detecte"))
-if sp500_close < sp500_sma200:
-    alertes.append(("ATTENTION", "S&P 500 sous sa SMA 200"))
-
-if alertes:
-    for niveau, msg in alertes:
-        if niveau == "CRITIQUE":
-            st.sidebar.error(f"[{niveau}] {msg}")
-        else:
-            st.sidebar.warning(f"[{niveau}] {msg}")
-else:
-    st.sidebar.success("Aucune alerte active")
-
-# Les alertes par position sont affichées dans l'onglet Bilan de Santé
+# Alertes déplacées après les calculs (voir plus bas)
 
 
 # ==========================================
@@ -936,6 +907,36 @@ def calculer_score_diversification(actifs_port, corr_matrix):
     return max(0, min(100, score))
 
 score_diversification = calculer_score_diversification(actifs_portefeuille, correlation)
+
+
+# ==========================================
+# SYSTEME D'ALERTES (sidebar, après calculs)
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.markdown("<h3 style='font-family: monospace;'>ALERTES ACTIVES</h3>", unsafe_allow_html=True)
+
+alertes = []
+if vix_actuel > seuil_vix:
+    alertes.append(("CRITIQUE", f"VIX a {vix_actuel:.1f} > seuil {seuil_vix}"))
+if risk_score >= 70:
+    alertes.append(("CRITIQUE", f"Score risque {risk_score}/100 — regime krach"))
+elif risk_score >= 40:
+    alertes.append(("ATTENTION", f"Score risque {risk_score}/100 — regime defensif"))
+if curve_inverted:
+    alertes.append(("ATTENTION", "Courbe des taux inversee"))
+if credit_stress:
+    alertes.append(("ATTENTION", "Stress sur le credit detecte"))
+if sp500_close < sp500_sma200:
+    alertes.append(("ATTENTION", "S&P 500 sous sa SMA 200"))
+
+if alertes:
+    for niveau, msg in alertes:
+        if niveau == "CRITIQUE":
+            st.sidebar.error(f"[{niveau}] {msg}")
+        else:
+            st.sidebar.warning(f"[{niveau}] {msg}")
+else:
+    st.sidebar.success("Aucune alerte active")
 
 
 # ==========================================
