@@ -10,2050 +10,686 @@ from scipy.linalg import inv
 from sklearn.covariance import ledoit_wolf
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.decomposition import PCA
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import logging
 import warnings
 
 warnings.filterwarnings('ignore')
 
-# --- Imports optionnels avec fallback ---
 HMM_DISPONIBLE = False
 try:
     from hmmlearn.hmm import GaussianHMM
     HMM_DISPONIBLE = True
 except ImportError:
-    logger_temp = logging.getLogger(__name__)
-    logger_temp.info("hmmlearn non installé — module HMM désactivé")
+    pass
 
-# --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="TERMINAL QUANTITATIF V36", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="TERMINAL QUANTITATIF V37", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# CSS PROFESSIONNEL — STYLE TERMINAL
+# CSS PROFESSIONNEL
 # ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
-    
-    /* Global */
     .stApp { font-family: 'IBM Plex Sans', sans-serif; }
-    h1, h2, h3, h4, h5, h6 { 
-        font-family: 'JetBrains Mono', monospace !important;
-        letter-spacing: 0.05em !important;
-        text-transform: uppercase !important;
-    }
-    
-    /* Sidebar */
-    [data-testid="stSidebar"] {
-        background-color: #0a0a0a !important;
-        border-right: 1px solid #1a1a2e !important;
-    }
-    [data-testid="stSidebar"] h3 {
-        font-size: 0.75rem !important;
-        color: #6c7293 !important;
-        letter-spacing: 0.15em !important;
-    }
-    
-    /* Metrics styling */
-    [data-testid="stMetric"] {
-        background-color: #0d0d1a;
-        border: 1px solid #1a1a2e;
-        border-radius: 2px;
-        padding: 12px 16px;
-    }
-    [data-testid="stMetricLabel"] {
-        font-family: 'JetBrains Mono', monospace !important;
-        font-size: 0.65rem !important;
-        letter-spacing: 0.12em !important;
-        color: #6c7293 !important;
-        text-transform: uppercase !important;
-    }
-    [data-testid="stMetricValue"] {
-        font-family: 'JetBrains Mono', monospace !important;
-        font-weight: 500 !important;
-    }
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0px;
-        border-bottom: 1px solid #1a1a2e;
-    }
-    .stTabs [data-baseweb="tab"] {
-        font-family: 'JetBrains Mono', monospace !important;
-        font-size: 0.7rem !important;
-        letter-spacing: 0.08em !important;
-        text-transform: uppercase !important;
-        padding: 8px 16px !important;
-        color: #6c7293 !important;
-        border-radius: 0 !important;
-    }
-    .stTabs [aria-selected="true"] {
-        color: #ffffff !important;
-        border-bottom: 2px solid #4a90e2 !important;
-        background-color: transparent !important;
-    }
-    
-    /* DataFrames */
+    h1, h2, h3, h4, h5, h6 { font-family: 'JetBrains Mono', monospace !important; letter-spacing: 0.05em !important; text-transform: uppercase !important; }
+    [data-testid="stSidebar"] { background-color: #0a0a0a !important; border-right: 1px solid #1a1a2e !important; }
+    [data-testid="stSidebar"] h3 { font-size: 0.75rem !important; color: #6c7293 !important; letter-spacing: 0.15em !important; }
+    [data-testid="stMetric"] { background-color: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 2px; padding: 12px 16px; }
+    [data-testid="stMetricLabel"] { font-family: 'JetBrains Mono', monospace !important; font-size: 0.65rem !important; letter-spacing: 0.12em !important; color: #6c7293 !important; text-transform: uppercase !important; }
+    [data-testid="stMetricValue"] { font-family: 'JetBrains Mono', monospace !important; font-weight: 500 !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 0px; border-bottom: 1px solid #1a1a2e; }
+    .stTabs [data-baseweb="tab"] { font-family: 'JetBrains Mono', monospace !important; font-size: 0.7rem !important; letter-spacing: 0.08em !important; text-transform: uppercase !important; padding: 8px 16px !important; color: #6c7293 !important; border-radius: 0 !important; }
+    .stTabs [aria-selected="true"] { color: #ffffff !important; border-bottom: 2px solid #4a90e2 !important; background-color: transparent !important; }
     .stDataFrame { border: 1px solid #1a1a2e; border-radius: 2px; }
-    
-    /* Expanders */
-    .streamlit-expanderHeader {
-        font-family: 'IBM Plex Sans', sans-serif !important;
-        font-size: 0.85rem !important;
-        border: 1px solid #1a1a2e !important;
-        border-radius: 2px !important;
-        background-color: #0d0d1a !important;
-    }
-    
-    /* Info boxes */
+    .streamlit-expanderHeader { font-family: 'IBM Plex Sans', sans-serif !important; font-size: 0.85rem !important; border: 1px solid #1a1a2e !important; border-radius: 2px !important; background-color: #0d0d1a !important; }
     .stAlert { border-radius: 2px !important; border-left: 3px solid #4a90e2 !important; }
-    
-    /* Badge styles */
-    .badge-bull { color: #00c853; font-weight: 600; }
-    .badge-bear { color: #ff1744; font-weight: 600; }
-    .badge-neutral { color: #ffc107; font-weight: 600; }
-    .badge-label { 
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.65rem;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        padding: 2px 8px;
-        border-radius: 2px;
-        display: inline-block;
-    }
-    .badge-green { background: #0a2e1a; color: #00c853; border: 1px solid #00c853; }
-    .badge-red { background: #2e0a0a; color: #ff1744; border: 1px solid #ff1744; }
-    .badge-yellow { background: #2e2a0a; color: #ffc107; border: 1px solid #ffc107; }
-    .badge-blue { background: #0a1a2e; color: #4a90e2; border: 1px solid #4a90e2; }
-    
-    /* Section dividers */
-    .section-header {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.7rem;
-        letter-spacing: 0.15em;
-        color: #6c7293;
-        text-transform: uppercase;
-        border-bottom: 1px solid #1a1a2e;
-        padding-bottom: 4px;
-        margin: 16px 0 12px 0;
-    }
-    
-    /* Hide Streamlit branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    .section-header { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; letter-spacing: 0.15em; color: #6c7293; text-transform: uppercase; border-bottom: 1px solid #1a1a2e; padding-bottom: 4px; margin: 16px 0 12px 0; }
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# CONSTANTES TRADE REPUBLIC
+# CONSTANTES
 # ==========================================
-FRAIS_ORDRE_TR = 1.0        # 1€ par ordre sur Trade Republic
-SPREAD_ESTIME_TR = 0.0015   # ~0.15% spread estimé moyen
-SEUIL_ORDRE_RENTABLE = 50   # Sous 50€, les frais mangent trop de rendement
-FLAT_TAX_FR = 0.30           # 30% PFU (Prélèvement Forfaitaire Unique)
-TAUX_CASH_TR_BRUT = 0.0375  # 3.75% brut sur cash Trade Republic
-TAUX_CASH_TR_NET = TAUX_CASH_TR_BRUT * (1 - FLAT_TAX_FR)  # ~2.625% net
-TICKER_MONETAIRE = "XEON.DE"  # Xtrackers EUR Overnight Rate Swap ETF
-ATR_PERIOD = 14               # Période pour l'Average True Range
-ATR_STOP_MULTIPLIER = 2.0     # Stop = Plus haut 6M - 2*ATR
+FRAIS_ORDRE_TR = 1.0
+SPREAD_ESTIME_TR = 0.0015
+FLAT_TAX_FR = 0.30
+TAUX_CASH_TR_BRUT = 0.0375
+TAUX_CASH_TR_NET = TAUX_CASH_TR_BRUT * (1 - FLAT_TAX_FR)
+TICKER_MONETAIRE = "XEON.DE"
+HURDLE_RATE = 2.0  # Un nouveau candidat doit avoir un Z-Score supérieur de 2.0 pour justifier un swap
 
 # ==========================================
-# SYSTÈME D'AUTHENTIFICATION
+# AUTHENTIFICATION
 # ==========================================
 if "authentifie" not in st.session_state:
     st.session_state.authentifie = False
-
 if not st.session_state.authentifie:
-    st.markdown(
-        "<h1 style='text-align: center; color: #ffffff; font-family: JetBrains Mono, monospace; "
-        "letter-spacing: 0.1em; font-weight: 300;'>"
-        "BUREAU D'ALLOCATION QUANTITATIVE</h1>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<p style='text-align: center; color: #6c7293; font-family: JetBrains Mono, monospace; "
-        "font-size: 0.75rem; letter-spacing: 0.15em;'>"
-        "ACCES RESTREINT &mdash; V36 &mdash; ADVISORY &amp; EXECUTION</p>",
-        unsafe_allow_html=True,
-    )
-    col_login1, col_login2, col_login3 = st.columns([1, 1, 1])
-    with col_login2:
-        MOT_DE_PASSE_SECRET = "BTSCG2026"
-        mdp_saisi = st.text_input("Clé d'Accès", type="password")
-        if st.button("INITIALISER LA SESSION", use_container_width=True):
-            if mdp_saisi == MOT_DE_PASSE_SECRET:
+    st.markdown("<h1 style='text-align:center;color:#fff;font-family:JetBrains Mono,monospace;letter-spacing:0.1em;font-weight:300;'>BUREAU D'ALLOCATION QUANTITATIVE</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center;color:#6c7293;font-family:JetBrains Mono,monospace;font-size:0.75rem;letter-spacing:0.15em;'>V37 &mdash; MODE FORTERESSE &mdash; SYSTEME CLOS</p>", unsafe_allow_html=True)
+    _, c, _ = st.columns([1, 1, 1])
+    with c:
+        mdp = st.text_input("Cle d'Acces", type="password")
+        if st.button("INITIALISER", use_container_width=True):
+            if mdp == "BTSCG2026":
                 st.session_state.authentifie = True
                 st.rerun()
             else:
-                st.error("ACCÈS REFUSÉ.")
+                st.error("ACCES REFUSE.")
     st.stop()
 
 # ==========================================
-# DEVISES — Conversion FX vers EUR
+# FX
 # ==========================================
 DEVISE_PAR_TICKER = {
-    "BTC-EUR": "EUR", "ETH-EUR": "EUR",
-    "IGLN.L": "GBP", "PHAG.L": "GBP",
-    "TLT": "USD", "DFNS.L": "GBP",
-    "RHM.DE": "EUR", "PLTR": "USD", "URNM": "USD",
+    "BTC-EUR": "EUR", "ETH-EUR": "EUR", "IGLN.L": "GBP", "PHAG.L": "GBP",
+    "TLT": "USD", "DFNS.L": "GBP", "RHM.DE": "EUR", "PLTR": "USD", "URNM": "USD",
     "CSPX.AS": "EUR", "DSY.PA": "EUR", "TTE.PA": "EUR", "MC.PA": "EUR",
     "HYG": "USD", "IEF": "USD", "GLD": "USD",
     "^VIX": "USD", "^TNX": "USD", "^GSPC": "USD", "^IRX": "USD",
 }
-
 
 @st.cache_data(ttl=3600)
 def obtenir_taux_change():
     try:
         fx = yf.download(["EURUSD=X", "EURGBP=X"], period="5d", progress=False)["Close"]
         fx = fx.ffill().bfill()
-        return {
-            "USD": 1.0 / float(fx["EURUSD=X"].iloc[-1]),
-            "GBP": 1.0 / float(fx["EURGBP=X"].iloc[-1]),
-            "EUR": 1.0,
-        }
+        return {"USD": 1.0 / float(fx["EURUSD=X"].iloc[-1]), "GBP": 1.0 / float(fx["EURGBP=X"].iloc[-1]), "EUR": 1.0}
     except Exception as e:
-        logger.warning(f"FX fallback 1:1 — {e}")
+        logger.warning(f"FX fallback — {e}")
         return {"USD": 1.0, "GBP": 1.0, "EUR": 1.0}
 
-
-def devise_ticker(ticker: str) -> str:
-    return DEVISE_PAR_TICKER.get(ticker, "USD")
-
-
-def prix_en_eur(prix: float, ticker: str, taux_fx: dict) -> float:
-    return prix * taux_fx.get(devise_ticker(ticker), 1.0)
-
+def devise_ticker(t): return DEVISE_PAR_TICKER.get(t, "USD")
+def prix_en_eur(prix, ticker, fx): return prix * fx.get(devise_ticker(ticker), 1.0)
 
 # ==========================================
-# UNIVERS D'INVESTISSEMENT
+# UNIVERS D'INVESTISSEMENT (MULTI-MARCHES)
 # ==========================================
 MES_FAVORIS = {
     "Bitcoin": {"ticker": "BTC-EUR", "nom": "Bitcoin (Crypto)"},
     "Ethereum": {"ticker": "ETH-EUR", "nom": "Ethereum (Crypto)"},
     "Or Physique": {"ticker": "IGLN.L", "nom": "iShares Physical Gold ETC"},
     "Argent Physique": {"ticker": "PHAG.L", "nom": "WisdomTree Physical Silver"},
-    "Bons du Trésor US 20A+": {"ticker": "TLT", "nom": "iShares 20+ Year Treasury Bond"},
-    "Défense USD": {"ticker": "DFNS.L", "nom": "VanEck Defense UCITS"},
+    "Bons du Tresor US 20A+": {"ticker": "TLT", "nom": "iShares 20+ Year Treasury Bond"},
+    "Defense USD": {"ticker": "DFNS.L", "nom": "VanEck Defense UCITS"},
     "Rheinmetall": {"ticker": "RHM.DE", "nom": "Rheinmetall AG"},
     "Palantir": {"ticker": "PLTR", "nom": "Palantir Technologies"},
     "Uranium USD": {"ticker": "URNM", "nom": "Sprott Uranium Miners ETF"},
     "Core S&P 500": {"ticker": "CSPX.AS", "nom": "iShares Core S&P 500 UCITS"},
-    "Dassault Systèmes": {"ticker": "DSY.PA", "nom": "Dassault Systèmes SE"},
+    "Dassault Systemes": {"ticker": "DSY.PA", "nom": "Dassault Systemes SE"},
     "TotalEnergies": {"ticker": "TTE.PA", "nom": "TotalEnergies SE"},
-    "LVMH": {"ticker": "MC.PA", "nom": "LVMH Moët Hennessy"},
+    "LVMH": {"ticker": "MC.PA", "nom": "LVMH Moet Hennessy"},
 }
 
-MOTS_CLES_ETF_CRYPTO = [
-    "Crypto", "ETF", "UCITS", "ETC", "Fund",
-    "iShares", "WisdomTree", "VanEck", "Sprott", "SPDR",
-    "Vanguard", "Amundi", "Lyxor",
-]
+MOTS_CLES_ETF_CRYPTO = ["Crypto", "ETF", "UCITS", "ETC", "Fund", "iShares", "WisdomTree", "VanEck", "Sprott", "SPDR", "Vanguard", "Amundi", "Lyxor"]
+def est_etf_ou_crypto(nom): return any(kw.lower() in nom.lower() for kw in MOTS_CLES_ETF_CRYPTO)
 
-
-def est_etf_ou_crypto(nom_instrument: str) -> bool:
-    return any(kw.lower() in nom_instrument.lower() for kw in MOTS_CLES_ETF_CRYPTO)
-
-
-@st.cache_data(ttl=86400)
-def aspirer_le_marche_sp500():
+def _scrape_index(url, sym_col, name_col, prefix, ticker_transform=None):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         html = requests.get(url, headers=headers, timeout=15).text
         table = pd.read_html(html)[0]
-        tickers = table["Symbol"].tolist()
-        noms = table["Security"].tolist()
         d = {}
-        for t, n in zip(tickers, noms):
-            tp = t.replace(".", "-")
-            d[f"S&P500: {tp}"] = {"ticker": tp, "nom": n}
-        if len(d) < 400:
-            logger.error(f"Scraping S&P 500 incomplet ({len(d)} titres)")
+        for _, row in table.iterrows():
+            t = str(row[sym_col]).strip().replace(".", "-")
+            if ticker_transform:
+                t = ticker_transform(t)
+            n = str(row[name_col]).strip()
+            if t and n and len(t) < 12:
+                d[f"{prefix}: {t}"] = {"ticker": t, "nom": n}
         return d
     except Exception as e:
-        logger.error(f"Échec scraping S&P 500 : {e}")
+        logger.warning(f"Scraping {prefix} echoue : {e}")
         return {}
 
+@st.cache_data(ttl=86400)
+def aspirer_sp500():
+    return _scrape_index("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", "Symbol", "Security", "S&P500")
 
+@st.cache_data(ttl=86400)
+def aspirer_nasdaq100():
+    return _scrape_index("https://en.wikipedia.org/wiki/Nasdaq-100", "Ticker", "Company", "NDX100")
+
+@st.cache_data(ttl=86400)
+def aspirer_eurostoxx50():
+    return _scrape_index("https://en.wikipedia.org/wiki/EURO_STOXX_50", "Ticker", "Company", "STOXX50")
+
+# Construire l'univers mondial
 univers_etudie = MES_FAVORIS.copy()
-mega_dict = aspirer_le_marche_sp500()
-for cle, donnees in mega_dict.items():
-    if donnees["ticker"] not in [v["ticker"] for v in univers_etudie.values()]:
-        univers_etudie[cle] = donnees
-
+tickers_existants = set(v["ticker"] for v in univers_etudie.values())
+for scraper in [aspirer_sp500, aspirer_nasdaq100, aspirer_eurostoxx50]:
+    for cle, donnees in scraper().items():
+        if donnees["ticker"] not in tickers_existants:
+            univers_etudie[cle] = donnees
+            tickers_existants.add(donnees["ticker"])
 
 # ==========================================
-# CHARGEMENT DES DONNÉES
+# DATA LOADING
 # ==========================================
 TICKERS_MACRO = ["^VIX", "^TNX", "^GSPC", "^IRX", "HYG", "IEF", "GLD"]
-
 
 @st.cache_data(ttl=3600)
 def telecharger_donnees(liste_tickers):
     tickers_complets = list(set(liste_tickers + TICKERS_MACRO))
     df = yf.download(tickers_complets, period="6y", progress=False)["Close"]
-    df = df.ffill().bfill()
-    return df
-
+    return df.ffill().bfill()
 
 @st.cache_data(ttl=86400)
-def obtenir_fondamentaux(ticker_str: str) -> dict:
+def obtenir_fondamentaux(ticker_str):
     try:
         info = yf.Ticker(ticker_str).info
-        return {
-            "trailingPE": info.get("trailingPE"),
-            "returnOnEquity": info.get("returnOnEquity"),
-            "recommendationMean": info.get("recommendationMean"),
-        }
+        return {"trailingPE": info.get("trailingPE"), "returnOnEquity": info.get("returnOnEquity"), "recommendationMean": info.get("recommendationMean")}
     except Exception as e:
-        logger.warning(f"Fondamentaux indisponibles pour {ticker_str}: {e}")
+        logger.debug(f"Fondamentaux indisponibles: {ticker_str}: {e}")
         return {}
-
-
-@st.cache_data(ttl=86400)
-def calculer_atr_et_stop(ticker_str: str, period: int = ATR_PERIOD) -> dict:
-    """Calcule l'ATR et le Trailing Stop pour un actif."""
-    try:
-        data = yf.download(ticker_str, period="1y", progress=False)
-        if data.empty or len(data) < period + 1:
-            return {"atr": None, "stop": None, "prix": None, "stop_touche": False}
-        high = data["High"].values.flatten() if data["High"].ndim > 1 else data["High"].values
-        low = data["Low"].values.flatten() if data["Low"].ndim > 1 else data["Low"].values
-        close = data["Close"].values.flatten() if data["Close"].ndim > 1 else data["Close"].values
-        tr = np.maximum(high[1:] - low[1:],
-                        np.maximum(abs(high[1:] - close[:-1]), abs(low[1:] - close[:-1])))
-        atr = float(np.mean(tr[-period:]))
-        plus_haut_6m = float(np.max(high[-126:]))
-        prix_actuel = float(close[-1])
-        stop = plus_haut_6m - ATR_STOP_MULTIPLIER * atr
-        return {
-            "atr": atr,
-            "stop": stop,
-            "prix": prix_actuel,
-            "plus_haut_6m": plus_haut_6m,
-            "stop_touche": prix_actuel < stop,
-        }
-    except Exception as e:
-        logger.warning(f"ATR échoué pour {ticker_str}: {e}")
-        return {"atr": None, "stop": None, "prix": None, "stop_touche": False}
-
-
-@st.cache_data(ttl=86400)
-def detecter_insider_buying(ticker_str: str) -> dict:
-    """Détecte les achats d'insiders récents via yfinance."""
-    try:
-        tk = yf.Ticker(ticker_str)
-        insiders = tk.get_insider_purchases()
-        if insiders is None or insiders.empty:
-            return {"signal": False, "detail": "Pas de données insider", "bonus_zscore": 0.0}
-        # Chercher des achats significatifs
-        if "Shares" in insiders.columns:
-            total_achats = insiders["Shares"].sum()
-        elif "shares" in insiders.columns:
-            total_achats = insiders["shares"].sum()
-        else:
-            return {"signal": False, "detail": "Format inconnu", "bonus_zscore": 0.0}
-        if total_achats > 0:
-            return {
-                "signal": True,
-                "detail": f"Achats insiders detectes ({total_achats:,.0f} titres)",
-                "bonus_zscore": 1.0,
-            }
-        return {"signal": False, "detail": "Aucun achat recent", "bonus_zscore": 0.0}
-    except Exception as e:
-        logger.debug(f"Insider data indisponible pour {ticker_str}: {e}")
-        return {"signal": False, "detail": "API indisponible", "bonus_zscore": 0.0}
-
 
 @st.cache_data(ttl=3600)
 def analyser_sentiment_nlp():
     try:
         analyzer = SentimentIntensityAnalyzer()
-        tickers_macro = ["^GSPC", "TLT", "GLD"]
-        toutes_les_news = []
-        for t in tickers_macro:
+        toutes = []
+        for t in ["^GSPC", "TLT", "GLD"]:
             news = yf.Ticker(t).news
-            if news:
-                toutes_les_news.extend(news)
-        if not toutes_les_news:
-            return 0.0, pd.DataFrame()
-        toutes_les_news = sorted(
-            toutes_les_news, key=lambda x: x.get("providerPublishTime", 0), reverse=True
-        )[:20]
-        lignes_news, scores_vader = [], []
-        for item in toutes_les_news:
-            titre = item.get("title", "")
-            score = analyzer.polarity_scores(titre)["compound"]
-            scores_vader.append(score)
-            ts = item.get("providerPublishTime", 0)
-            date_str = datetime.fromtimestamp(ts).strftime("%d/%m/%Y %H:%M") if ts > 0 else "N/A"
-            lignes_news.append({"Date": date_str, "Gros Titre": titre, "Score VADER": score})
-        return float(np.mean(scores_vader)), pd.DataFrame(lignes_news)
-    except Exception as e:
-        logger.warning(f"Analyse NLP échouée : {e}")
-        return 0.0, pd.DataFrame()
+            if news: toutes.extend(news)
+        if not toutes: return 0.0
+        toutes = sorted(toutes, key=lambda x: x.get("providerPublishTime", 0), reverse=True)[:20]
+        return float(np.mean([analyzer.polarity_scores(i.get("title", ""))["compound"] for i in toutes]))
+    except: return 0.0
 
-
-def calculate_z_score(series):
-    std = series.std()
-    if std == 0 or pd.isna(std):
-        return pd.Series(np.zeros(len(series)), index=series.index)
-    return (series - series.mean()) / std
-
+def calculate_z_score(s):
+    std = s.std()
+    return (s - s.mean()) / std if std > 0 and not pd.isna(std) else pd.Series(0, index=s.index)
 
 # ==========================================
-# PORTEFEUILLE PAR DÉFAUT (valeurs réelles Trade Republic)
+# PORTEFEUILLE — SYSTEME CLOS
 # ==========================================
-if "mon_portefeuille" not in st.session_state or "Valeur (EUR)" in st.session_state.mon_portefeuille.columns:
-    # Force reset si ancien format détecté
+if "mon_portefeuille" not in st.session_state or "Valeur (EUR)" in getattr(st.session_state.get("mon_portefeuille", pd.DataFrame()), "columns", []):
     st.session_state.mon_portefeuille = pd.DataFrame({
-        "Actif": [
-            "Core S&P 500", "Bitcoin", "Or Physique", "Palantir",
-            "Argent Physique", "Uranium USD", "Rheinmetall",
-        ],
-        "Quantité": [0.72, 0.0035, 4.5, 0.65, 1.8, 0.55, 0.015],
-        "PRU / Part (EUR)": [557.0, 84285.0, 22.4, 84.6, 27.8, 19.6, 633.0],
-        "Cœur": [True, True, True, False, False, False, False],
+        "Actif": ["Core S&P 500", "Bitcoin", "Or Physique", "Palantir", "Argent Physique", "Uranium USD", "Rheinmetall"],
+        "Quantite": [0.72, 0.0035, 4.5, 0.65, 1.8, 0.55, 0.015],
+        "PRU / Part": [557.0, 84285.0, 22.4, 84.6, 27.8, 19.6, 633.0],
+        "Coeur": [True, True, True, False, False, False, False],
     })
 
 # ==========================================
-# PANNEAU DE CONTRÔLE LATÉRAL
+# SIDEBAR
 # ==========================================
-st.sidebar.markdown("<h3 style='font-family: monospace;'>CONTRÔLES SYSTÈME</h3>", unsafe_allow_html=True)
-if st.sidebar.button("FORCER L'ACTUALISATION EN DIRECT", use_container_width=True):
+st.sidebar.markdown("<h3 style='font-family:monospace;'>CONTROLES</h3>", unsafe_allow_html=True)
+if st.sidebar.button("FORCER L'ACTUALISATION", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<h3 style='font-family: monospace;'>PARAMÈTRES DU PORTEFEUILLE</h3>", unsafe_allow_html=True)
+st.sidebar.markdown("<h3 style='font-family:monospace;'>PARAMETRES</h3>", unsafe_allow_html=True)
+seuil_vix = st.sidebar.slider("Seuil VIX (Panique)", 15, 40, 22)
+target_volatility = st.sidebar.slider("Volatilite Cible (%)", 5, 25, 12) / 100.0
+correl_max = st.sidebar.slider("Correlation Max (%)", 50, 95, 75) / 100.0
+cash_tr = st.sidebar.number_input("Cash sur TR (EUR)", min_value=0.0, value=5.0, step=1.0)
 
-# [V36] Le capital est calculé automatiquement depuis les positions
-st.sidebar.markdown("*Valorisation Mark-to-Market en direct.*")
-
-seuil_vix = st.sidebar.slider("Seuil d'Alerte VIX (Panique)", 15, 40, 22)
-target_volatility = st.sidebar.slider("Volatilité Annuelle Cible (%)", 5, 25, 12) / 100.0
-min_trade_size = st.sidebar.slider("Taille d'Ordre Minimum (EUR)", 10, 100, 50,
-                                    help=f"Sous {SEUIL_ORDRE_RENTABLE}€, les frais TR de {FRAIS_ORDRE_TR}€ grignotent trop le rendement.")
-turnover_penalty = st.sidebar.slider("Pénalité de Rotation (%)", 5, 30, 15) / 100.0
-correl_max = st.sidebar.slider("Limite de Corrélation Max (%)", 50, 95, 75) / 100.0
-max_weight_limit = 0.25
-
-cash_non_investi = st.sidebar.number_input("Cash non-investi sur TR (EUR)", min_value=0.0, value=5.0, step=1.0)
-
-# Validation du portefeuille AVANT tout calcul
+# Validation portefeuille
 df_port = st.session_state.mon_portefeuille.copy()
 df_port = df_port.dropna(subset=["Actif"])
-df_port = df_port[df_port["Actif"].isin(univers_etudie.keys())]
-df_port = df_port.drop_duplicates(subset=["Actif"], keep="first")
-if "Quantité" not in df_port.columns:
-    df_port["Quantité"] = 0.0
-df_port["Quantité"] = pd.to_numeric(df_port["Quantité"], errors="coerce").clip(lower=0).fillna(0)
-if "PRU / Part (EUR)" not in df_port.columns:
-    df_port["PRU / Part (EUR)"] = 0.0
-df_port["PRU / Part (EUR)"] = pd.to_numeric(df_port["PRU / Part (EUR)"], errors="coerce").clip(lower=0).fillna(0)
+df_port = df_port[df_port["Actif"].isin(univers_etudie.keys())].drop_duplicates(subset=["Actif"], keep="first")
+df_port["Quantite"] = pd.to_numeric(df_port["Quantite"], errors="coerce").clip(lower=0).fillna(0)
+df_port["PRU / Part"] = pd.to_numeric(df_port["PRU / Part"], errors="coerce").clip(lower=0).fillna(0)
+if "Coeur" not in df_port.columns: df_port["Coeur"] = False
 st.session_state.mon_portefeuille = df_port.reset_index(drop=True)
 
-# Budget calculé après téléchargement des données (Mark-to-Market)
-
-
 # ==========================================
-# EXÉCUTION DU MOTEUR CENTRAL
+# MOTEUR
 # ==========================================
-with st.spinner("Calcul des recommandations IA en cours..."):
-    liste_tickers_bruts = [v["ticker"] for v in univers_etudie.values()]
-    df_brut = telecharger_donnees(liste_tickers_bruts)
+with st.spinner("Analyse en cours..."):
+    liste_tickers = [v["ticker"] for v in univers_etudie.values()]
+    df_brut = telecharger_donnees(liste_tickers)
     taux_fx = obtenir_taux_change()
-    avg_nlp_score, df_headlines = analyser_sentiment_nlp()
+    avg_nlp = analyser_sentiment_nlp()
 
-# ==========================================
-# MARK-TO-MARKET : Valorisation live du portefeuille
-# ==========================================
-def valoriser_position(actif_nom: str, quantite: float, df_prix, taux_fx_dict) -> float:
-    """Calcule la valeur live en EUR d'une position à partir de sa quantité."""
-    if actif_nom not in univers_etudie or quantite <= 0:
-        return 0.0
-    ticker = univers_etudie[actif_nom]["ticker"]
-    if ticker not in df_prix.columns:
-        return 0.0
+# Mark-to-Market
+def valoriser(actif, qty, df_prix, fx):
+    if actif not in univers_etudie or qty <= 0: return 0.0
+    t = univers_etudie[actif]["ticker"]
+    if t not in df_prix.columns: return 0.0
     try:
-        prix_brut = float(df_prix[ticker].iloc[-1])
-        if pd.isna(prix_brut) or prix_brut <= 0:
-            return 0.0
-        return quantite * prix_en_eur(prix_brut, ticker, taux_fx_dict)
-    except Exception:
-        return 0.0
+        p = float(df_prix[t].iloc[-1])
+        return qty * prix_en_eur(p, t, fx) if not pd.isna(p) and p > 0 else 0.0
+    except: return 0.0
 
-# Construire dict_actuel (valeur live EUR) et dict_pru (coût total EUR)
-dict_actuel = {}
-dict_pru = {}
-dict_quantite = {}
-for _, row in st.session_state.mon_portefeuille.iterrows():
-    actif = row["Actif"]
-    if pd.isna(actif) or actif not in univers_etudie:
-        continue
-    qty = float(row.get("Quantité", 0))
-    pru_unit = float(row.get("PRU / Part (EUR)", 0))
-    val_live = valoriser_position(actif, qty, df_brut, taux_fx)
-    dict_actuel[actif] = val_live
-    dict_pru[actif] = qty * pru_unit  # Coût total = quantité * PRU unitaire
-    dict_quantite[actif] = qty
-
-# Injecter la valeur live dans le DataFrame pour les calculs en aval
-df_port_live = st.session_state.mon_portefeuille.copy()
-df_port_live["Valeur Live (EUR)"] = df_port_live["Actif"].map(lambda a: dict_actuel.get(a, 0.0))
+dict_actuel, dict_pru, dict_qty = {}, {}, {}
+for _, r in st.session_state.mon_portefeuille.iterrows():
+    a = r["Actif"]
+    if pd.isna(a) or a not in univers_etudie: continue
+    q = float(r.get("Quantite", 0))
+    dict_actuel[a] = valoriser(a, q, df_brut, taux_fx)
+    dict_pru[a] = q * float(r.get("PRU / Part", 0))
+    dict_qty[a] = q
 
 budget_actions = sum(dict_actuel.values())
-budget = budget_actions + cash_non_investi
-
+budget = budget_actions + cash_tr
 st.sidebar.markdown("---")
-st.sidebar.metric("Valeur Actions (Live)", f"{budget_actions:.2f} €")
-st.sidebar.metric("Cash TR", f"{cash_non_investi:.2f} €")
-st.sidebar.metric("Capital Total", f"{budget:.2f} €")
-
+st.sidebar.metric("Actions (Live)", f"{budget_actions:.2f} EUR")
+st.sidebar.metric("Cash TR", f"{cash_tr:.2f} EUR")
+st.sidebar.metric("Capital Total", f"{budget:.2f} EUR")
 
 # ==========================================
-# 1. DÉTECTION DU RÉGIME IA (K-MEANS)
+# REGIME K-MEANS
 # ==========================================
-df_ml = pd.DataFrame({
-    "VIX": df_brut["^VIX"],
-    "Écart_Taux": df_brut["^TNX"] - df_brut["^IRX"],
-    "Écart_Crédit": df_brut["HYG"] / df_brut["IEF"],
-    "SP500_Rendement": df_brut["^GSPC"].pct_change(),
+df_macro = pd.DataFrame({
+    "VIX": df_brut["^VIX"], "Spread": df_brut["^TNX"] - df_brut["^IRX"],
+    "Credit": df_brut["HYG"] / df_brut["IEF"], "SP_Ret": df_brut["^GSPC"].pct_change(),
 }).dropna()
-
 scaler = StandardScaler()
-scaled_data = scaler.fit_transform(df_ml)
+scaled = scaler.fit_transform(df_macro)
+init_c = scaler.transform(np.array([[15,1.5,1.05,0.002],[22,0.5,1.0,-0.001],[35,-0.5,0.95,-0.005]]))
+kmeans = KMeans(n_clusters=3, init=init_c, n_init=1, random_state=42).fit(scaled)
+cluster_vix = df_macro.assign(C=kmeans.labels_).groupby("C")["VIX"].mean()
+bear_c = cluster_vix.idxmax()
+current_c = kmeans.predict(scaled[-1].reshape(1,-1))[0]
 
-initial_centers = np.array([
-    [15.0, 1.5, 1.05, 0.002],
-    [22.0, 0.5, 1.00, -0.001],
-    [35.0, -0.5, 0.95, -0.005],
-])
-initial_centers_scaled = scaler.transform(initial_centers)
-kmeans = KMeans(n_clusters=3, init=initial_centers_scaled, n_init=1, random_state=42)
-kmeans.fit(scaled_data)
-df_ml["Cluster"] = kmeans.labels_
-
-cluster_vix_means = df_ml.groupby("Cluster")["VIX"].mean()
-bull_cluster = cluster_vix_means.idxmin()
-bear_cluster = cluster_vix_means.idxmax()
-current_cluster = kmeans.predict(scaled_data[-1].reshape(1, -1))[0]
-
-vix_actuel = float(df_brut["^VIX"].iloc[-1])
+vix = float(df_brut["^VIX"].iloc[-1])
 taux_10y = float(df_brut["^TNX"].iloc[-1])
 taux_3m = float(df_brut["^IRX"].iloc[-1])
-curve_inverted = (taux_10y - taux_3m) < 0.0
-
-df_brut["Stress_Credit"] = df_brut["HYG"] / df_brut["IEF"]
-credit_stress = float(df_brut["Stress_Credit"].iloc[-1]) < float(df_brut["Stress_Credit"].tail(50).mean())
-
-sp500_close = float(df_brut["^GSPC"].iloc[-1])
-sp500_sma200 = float(df_brut["^GSPC"].tail(200).mean())
+curve_inv = (taux_10y - taux_3m) < 0
+credit_stress = float(df_brut["HYG"].iloc[-1]/df_brut["IEF"].iloc[-1]) < float((df_brut["HYG"]/df_brut["IEF"]).tail(50).mean())
+sp_close = float(df_brut["^GSPC"].iloc[-1])
+sp_sma200 = float(df_brut["^GSPC"].tail(200).mean())
 
 risk_score = 0
-if avg_nlp_score < -0.15:
-    risk_score += 20
-elif avg_nlp_score > 0.15:
-    risk_score -= 10
-if sp500_close < sp500_sma200:
-    risk_score += 40
-if curve_inverted:
-    risk_score += 30
-if credit_stress:
-    risk_score += 30
-if vix_actuel > seuil_vix:
-    risk_score += 20
-
+if avg_nlp < -0.15: risk_score += 20
+elif avg_nlp > 0.15: risk_score -= 10
+if sp_close < sp_sma200: risk_score += 40
+if curve_inv: risk_score += 30
+if credit_stress: risk_score += 30
+if vix > seuil_vix: risk_score += 20
 risk_score = max(0, min(100, risk_score))
 
-if risk_score >= 70 or current_cluster == bear_cluster:
-    regime_marche = "KRACH IMMINENT (IA & NLP)"
-    tail_hedge_active = True
+if risk_score >= 70 or current_c == bear_c:
+    regime = "KRACH IMMINENT"
+    tail_hedge = True
 elif risk_score >= 40:
-    regime_marche = "RÉGIME DÉFENSIF"
-    tail_hedge_active = False
+    regime = "DEFENSIF"
+    tail_hedge = False
 else:
-    regime_marche = "RÉGIME HAUSSIER"
-    tail_hedge_active = False
+    regime = "HAUSSIER"
+    tail_hedge = False
 
-# En mode défensif on resserre la corrélation mais pas au point de tout rejeter
-if tail_hedge_active:
-    dynamic_correl_max = min(correl_max, 0.60)
-elif risk_score >= 40:
-    dynamic_correl_max = min(correl_max, 0.70)
-else:
-    dynamic_correl_max = correl_max
-
-
-# ==========================================
-# 1b. MODELE DE MARKOV CACHE (HMM) — Anticipation Macro
-# ==========================================
-hmm_proba_krach = 0.0
-hmm_transmat = None
-hmm_regime_actuel = -1
-hmm_regime_names = {0: "BULL", 1: "NEUTRE", 2: "BEAR"}
-
+# HMM
+hmm_proba_krach, hmm_transmat, hmm_regime = 0.0, None, -1
+hmm_names = {0: "BULL", 1: "NEUTRE", 2: "BEAR"}
 if HMM_DISPONIBLE:
     try:
-        # Features hebdomadaires pour le HMM
-        hmm_features = pd.DataFrame({
-            "VIX": df_brut["^VIX"],
-            "Spread_Taux": df_brut["^TNX"] - df_brut["^IRX"],
-            "SP500_Ret": df_brut["^GSPC"].pct_change(),
-            "Credit": df_brut["HYG"] / df_brut["IEF"],
-        }).dropna().resample("W-FRI").last().dropna()
-
-        hmm_scaler = StandardScaler()
-        hmm_data = hmm_scaler.fit_transform(hmm_features)
-
-        hmm_model = GaussianHMM(
-            n_components=3, covariance_type="full",
-            n_iter=200, random_state=42, tol=0.01,
-        )
-        hmm_model.fit(hmm_data)
-
-        # Identifier quel état = Bear (VIX moyen le plus élevé)
-        hmm_states = hmm_model.predict(hmm_data)
-        hmm_features_copy = hmm_features.iloc[:len(hmm_states)].copy()
-        hmm_features_copy["State"] = hmm_states
-        state_vix_mean = hmm_features_copy.groupby("State")["VIX"].mean()
-        bear_state = state_vix_mean.idxmax()
-        bull_state = state_vix_mean.idxmin()
-        neutral_state = [s for s in range(3) if s != bear_state and s != bull_state][0]
-
-        hmm_regime_names = {bull_state: "BULL", neutral_state: "NEUTRE", bear_state: "BEAR"}
-        hmm_regime_actuel = hmm_states[-1]
-
-        # Matrice de transition
-        hmm_transmat = hmm_model.transmat_
-
-        # Probabilité de basculer en Bear la semaine prochaine
-        hmm_proba_krach = float(hmm_transmat[hmm_regime_actuel, bear_state])
-
-        logger.info(f"HMM — Régime actuel: {hmm_regime_names.get(hmm_regime_actuel, '?')}, "
-                     f"P(Bear semaine prochaine): {hmm_proba_krach:.1%}")
-
+        hf = df_macro.resample("W-FRI").last().dropna()
+        hs = StandardScaler()
+        hd = hs.fit_transform(hf)
+        hm = GaussianHMM(n_components=3, covariance_type="full", n_iter=200, random_state=42, tol=0.01).fit(hd)
+        states = hm.predict(hd)
+        svix = hf.iloc[:len(states)].assign(S=states).groupby("S")["VIX"].mean()
+        bear_s = svix.idxmax(); bull_s = svix.idxmin()
+        neut_s = [s for s in range(3) if s != bear_s and s != bull_s][0]
+        hmm_names = {bull_s: "BULL", neut_s: "NEUTRE", bear_s: "BEAR"}
+        hmm_regime = states[-1]
+        hmm_transmat = hm.transmat_
+        hmm_proba_krach = float(hmm_transmat[hmm_regime, bear_s])
     except Exception as e:
-        logger.warning(f"HMM échoué : {e}")
-        hmm_proba_krach = 0.0
-
+        logger.warning(f"HMM: {e}")
 
 # ==========================================
-# PRÉPARATION DES DONNÉES QUANTITATIVES
+# QUANTITATIF
 # ==========================================
-df_hebdo = df_brut.tail(252 * 3).resample("W-FRI").last().dropna(how="all")
-colonnes_actifs_dispo = [t for t in liste_tickers_bruts if t in df_hebdo.columns]
-df_actifs = df_hebdo[colonnes_actifs_dispo].copy()
+df_hebdo = df_brut.tail(252*3).resample("W-FRI").last().dropna(how="all")
 inv_map = {v["ticker"]: k for k, v in univers_etudie.items()}
-df_actifs.rename(columns=inv_map, inplace=True)
-
-rendements_hebdo = np.log(df_actifs / df_actifs.shift(1)).dropna(how="all")
-volatilite = rendements_hebdo.rolling(window=52).std().iloc[-1] * np.sqrt(52)
-rendements_negatifs = rendements_hebdo.copy()
-rendements_negatifs[rendements_negatifs > 0] = 0
-sortino_brut = (rendements_hebdo.mean() * 52) / (
-    rendements_negatifs.std() * np.sqrt(52)
-).replace(0, np.nan)
-
-rendements_cumules = (1 + rendements_hebdo).cumprod()
-max_dd = ((rendements_cumules - rendements_cumules.cummax()) / rendements_cumules.cummax()).min()
-
-# Garder les colonnes avec assez de données (au moins 80% de valeurs)
-rendements_propres = rendements_hebdo.dropna(axis=1, thresh=int(len(rendements_hebdo) * 0.8))
-rendements_propres = rendements_propres.dropna(axis=0)
-if rendements_propres.shape[0] > 10 and rendements_propres.shape[1] > 1:
-    lw_cov_brut, shrinkage_penalty = ledoit_wolf(rendements_propres)
-    correlation = pd.DataFrame(lw_cov_brut, index=rendements_propres.columns, columns=rendements_propres.columns).corr()
+df_actifs = df_hebdo[[t for t in liste_tickers if t in df_hebdo.columns]].rename(columns=inv_map)
+ret_hebdo = np.log(df_actifs / df_actifs.shift(1)).dropna(how="all")
+vol = ret_hebdo.rolling(52).std().iloc[-1] * np.sqrt(52)
+ret_neg = ret_hebdo.copy(); ret_neg[ret_neg > 0] = 0
+sortino = (ret_hebdo.mean() * 52) / (ret_neg.std() * np.sqrt(52)).replace(0, np.nan)
+ret_cum = (1 + ret_hebdo).cumprod()
+max_dd = ((ret_cum - ret_cum.cummax()) / ret_cum.cummax()).min()
+ret_propres = ret_hebdo.dropna(axis=1, thresh=int(len(ret_hebdo)*0.8)).dropna(axis=0)
+if ret_propres.shape[0] > 10 and ret_propres.shape[1] > 1:
+    correlation = pd.DataFrame(ledoit_wolf(ret_propres)[0], index=ret_propres.columns, columns=ret_propres.columns).corr()
 else:
-    correlation = rendements_propres.corr()
-
-sortino_ajuste = sortino_brut.copy()
-for actif in sortino_ajuste.index:
-    if "S&P500:" in actif:
-        sortino_ajuste[actif] *= 1.0 - turnover_penalty
-
-actifs_pre_eligibles = [
-    a for a in univers_etudie.keys()
-    if a in volatilite.index
-    and not pd.isna(volatilite.get(a, np.nan))
-    and volatilite[a] <= 0.60
-    and max_dd.get(a, -1.0) >= -0.45
-    and a != "Bons du Trésor US 20A+"
-]
-top_20_candidats = sortino_ajuste.reindex(actifs_pre_eligibles).dropna().sort_values(ascending=False).head(20).index.tolist()
-
+    correlation = ret_propres.corr()
 
 # ==========================================
-# 2. MACHINE LEARNING PRÉDICTIF
+# Z-SCORE FORTERESSE (sans ML)
 # ==========================================
-def construire_features_ml(candidat, rendements, df_macro):
-    ret = rendements.get(candidat)
-    if ret is None:
-        return pd.DataFrame()
-    features = pd.DataFrame({
-        "ret_lag1": ret,
-        "ret_lag2": ret.shift(1),
-        "ret_lag4": ret.shift(3),
-        "vol_12w": ret.rolling(12).std(),
-        "momentum_13w": ret.rolling(13).sum(),
-    }, index=ret.index)
-    for col in ["VIX", "Écart_Taux", "Écart_Crédit", "SP500_Rendement"]:
-        if col in df_macro.columns:
-            features[col] = df_macro[col].reindex(features.index, method="ffill")
-    features["target"] = ret.shift(-1)
-    features = features.dropna()
-    return features
-
-
-ml_predictions = {}
-ml_cv_scores = {}
-
-for candidat in top_20_candidats:
-    try:
-        features_df = construire_features_ml(candidat, rendements_hebdo, df_ml)
-        if len(features_df) < 60:
-            ml_predictions[candidat] = 0.0
-            continue
-        X = features_df.drop(columns=["target"]).values
-        y = features_df["target"].values
-        model = GradientBoostingRegressor(
-            n_estimators=100, max_depth=3, learning_rate=0.05, subsample=0.8, random_state=42
-        )
-        tscv = TimeSeriesSplit(n_splits=5)
-        cv_scores = cross_val_score(model, X, y, cv=tscv, scoring="neg_mean_squared_error")
-        ml_cv_scores[candidat] = float(np.mean(cv_scores))
-        model.fit(X, y)
-        pred = model.predict(X[-1].reshape(1, -1))[0]
-        ml_predictions[candidat] = pred
-    except Exception as e:
-        logger.warning(f"ML échoué pour {candidat}: {e}")
-        ml_predictions[candidat] = 0.0
-
-
-# ==========================================
-# 3. MOTEUR DE SCORE MULTI-FACTEURS
-# ==========================================
-fundamentals_data = []
-
-for candidat in top_20_candidats:
-    ticker_str = univers_etudie[candidat]["ticker"]
-    nom_instrument = univers_etudie[candidat]["nom"]
-    is_etf = est_etf_ou_crypto(nom_instrument)
-
-    if ticker_str not in df_brut.columns:
-        continue
-
-    prix_brut = float(df_brut[ticker_str].iloc[-1])
-    sma_200_brut = float(df_brut[ticker_str].tail(200).mean())
-    trend_ratio = (prix_brut / sma_200_brut) - 1.0 if sma_200_brut > 0 else 0
-
-    pe, roe, consensus = 15.0, 0.15, 3.0
-    if not is_etf:
-        fondamentaux = obtenir_fondamentaux(ticker_str)
-        pe_raw = fondamentaux.get("trailingPE")
-        roe_raw = fondamentaux.get("returnOnEquity")
-        cons_raw = fondamentaux.get("recommendationMean")
-        if pe_raw is not None and 0 < pe_raw < 100:
-            pe = pe_raw
-        elif pe_raw is not None and (pe_raw < 0 or pe_raw > 100):
-            continue
-        if roe_raw is not None:
-            roe = roe_raw
-        if cons_raw is not None:
-            consensus = cons_raw
-
-    # Détection insider buying (actions individuelles uniquement)
-    insider_bonus = 0.0
-    if not is_etf:
-        insider_info = detecter_insider_buying(ticker_str)
-        insider_bonus = insider_info.get("bonus_zscore", 0.0)
-
-    fundamentals_data.append({
-        "Actif": candidat,
-        "P/E": pe, "ROE": roe, "Consensus": consensus,
-        "Sortino": sortino_ajuste.get(candidat, 0.0),
-        "Tendance": trend_ratio,
-        "Pred_ML": ml_predictions.get(candidat, 0.0),
-        "Insider_Bonus": insider_bonus,
-    })
-
-# Calcul ATR et Trailing Stop pour chaque actif du portefeuille
-atr_data = {}
-for actif in st.session_state.mon_portefeuille["Actif"].tolist():
-    if actif in univers_etudie:
-        atr_data[actif] = calculer_atr_et_stop(univers_etudie[actif]["ticker"])
-
-df_zscore = pd.DataFrame(fundamentals_data)
-if not df_zscore.empty:
-    df_zscore["Score_Global"] = (
-        -calculate_z_score(df_zscore["P/E"]).fillna(0)
-        + calculate_z_score(df_zscore["ROE"]).fillna(0)
-        + calculate_z_score(df_zscore["Sortino"]).fillna(0)
-        - calculate_z_score(df_zscore["Consensus"]).fillna(0)
-        + calculate_z_score(df_zscore["Tendance"]).fillna(0)
-        + calculate_z_score(df_zscore["Pred_ML"]).fillna(0)
-        + df_zscore["Insider_Bonus"].fillna(0)  # Bonus direct (pas Z-normalisé)
-    )
-    actifs_eligibles_finaux = df_zscore.sort_values("Score_Global", ascending=False)["Actif"].tolist()
-else:
-    actifs_eligibles_finaux = []
-
-# ==========================================
-# 4. BLACK-LITTERMAN & ALLOCATION
-# ==========================================
-actifs_verrouilles = [
-    row["Actif"] for _, row in st.session_state.mon_portefeuille.iterrows()
-    if row.get("Cœur", False) and row["Actif"] in univers_etudie
-]
-capital_verrouille = sum(
-    dict_actuel.get(row["Actif"], 0.0) for _, row in st.session_state.mon_portefeuille.iterrows()
-    if row.get("Cœur", False) and row["Actif"] in univers_etudie
-)
-budget_satellite = max(0, budget - capital_verrouille)
-
-# Nombre max d'actifs satellite adapté au budget disponible
-max_satellite_actifs = max(1, min(8, int(budget_satellite / min_trade_size))) if budget_satellite > 0 else 0
-
-top_satellite_actifs = []
-for candidat in actifs_eligibles_finaux:
-    if len(top_satellite_actifs) >= max_satellite_actifs:
-        break
-    if candidat not in correlation.index:
-        continue
-    trop_correle = False
-    for s in top_satellite_actifs:
-        if s in correlation.index and candidat in correlation.columns:
-            if abs(correlation.loc[candidat, s]) > dynamic_correl_max:
-                trop_correle = True
-                break
-    if not trop_correle:
-        top_satellite_actifs.append(candidat)
-
-
-port_vol_initial = 0.0
-expected_portfolio_return = 0.0
-allocations_satellite = pd.Series(dtype=float)
-budget_tail_risk = 0
-
-# Cash minimum obligatoire selon le régime de marché
-if tail_hedge_active or risk_score >= 70:
-    min_cash_pct = 0.15  # 15% en cash minimum si krach
-elif risk_score >= 40:
-    min_cash_pct = 0.05  # 5% minimum en défensif
-else:
-    min_cash_pct = 0.0   # 0% en haussier
-
-reserve_cash_pct = min_cash_pct
-
-if len(top_satellite_actifs) > 0 and budget_satellite > 0:
-    actifs_bl = [a for a in top_satellite_actifs if a in rendements_propres.columns]
-    if len(actifs_bl) > 0:
-        rendements_top5 = rendements_propres[actifs_bl]
-        
-        # Cas spécial : 1 seul actif satellite → pas besoin de BL
-        if len(actifs_bl) == 1:
-            budget_invest = budget_satellite * (1.0 - reserve_cash_pct)
-            if tail_hedge_active:
-                budget_tail_risk = budget_invest * 0.30
-                budget_invest -= budget_tail_risk
-            allocations_satellite = pd.Series({actifs_bl[0]: budget_invest})
-            ret_a = rendements_top5.mean().values[0] * 52
-            vol_a = rendements_top5.std().values[0] * np.sqrt(52)
-            expected_portfolio_return = float(ret_a) if not np.isnan(ret_a) else 0.0
-            port_vol_initial = float(vol_a) if not np.isnan(vol_a) else 0.0
-        
-        # Cas normal : 2+ actifs → Black-Litterman complet
-        elif len(actifs_bl) >= 2:
-            try:
-                lw_cov_top5, _ = ledoit_wolf(rendements_top5)
-                cov_matrix_normal = lw_cov_top5 * 52
-
-                # Covariance sous stress
-                jours_krach = df_brut["^GSPC"].pct_change().dropna() < -0.01
-                idx_crash = jours_krach[jours_krach].index.intersection(rendements_propres.index)
-                if len(idx_crash) > 10:
-                    cov_crash = rendements_propres.loc[idx_crash, actifs_bl].cov().values * 52
-                    if cov_crash.shape == cov_matrix_normal.shape:
-                        cov_matrix = 0.7 * cov_matrix_normal + 0.3 * cov_crash
-                    else:
-                        cov_matrix = cov_matrix_normal
-                else:
-                    cov_matrix = cov_matrix_normal
-
-                n_a = len(actifs_bl)
-                inv_vol_bl = 1.0 / np.clip(volatilite[actifs_bl].values, 0.01, None)
-                w_eq = inv_vol_bl / inv_vol_bl.sum()
-                Pi = 2.5 * np.dot(cov_matrix, w_eq)
-
-                # Vues ML avec confiance calibrée
-                Q = np.array([ml_predictions.get(a, 0.0) * 52 for a in actifs_bl])
-                omega_diag = [max(abs(ml_cv_scores.get(a, -0.01)) * 52, 0.01) for a in actifs_bl]
-                Omega = np.diag(omega_diag)
-                P = np.eye(n_a)
-                tau = 0.05
-
-                term1 = inv(inv(tau * cov_matrix) + P.T @ inv(Omega) @ P)
-                term2 = inv(tau * cov_matrix) @ Pi + P.T @ inv(Omega) @ Q
-                BL_returns = term1 @ term2
-
-                poids_optimaux = np.clip(inv(cov_matrix) @ BL_returns, 0, None)
-                if poids_optimaux.sum() > 0:
-                    poids_optimaux = poids_optimaux / poids_optimaux.sum()
-                else:
-                    poids_optimaux = w_eq
-
-                # Plafonner les poids
-                for _ in range(10):
-                    if not any(poids_optimaux > max_weight_limit + 1e-5):
-                        break
-                    excess = (poids_optimaux[poids_optimaux > max_weight_limit] - max_weight_limit).sum()
-                    poids_optimaux[poids_optimaux > max_weight_limit] = max_weight_limit
-                    mask = poids_optimaux < max_weight_limit
-                    if mask.sum() > 0:
-                        poids_optimaux[mask] += excess * (poids_optimaux[mask] / poids_optimaux[mask].sum())
-                    else:
-                        break
-
-                port_vol_initial = float(np.sqrt(poids_optimaux.T @ cov_matrix @ poids_optimaux))
-                ret_annuel = rendements_top5.mean() * 52
-                ret_annuel = ret_annuel.fillna(0)
-                expected_portfolio_return = float(np.dot(poids_optimaux, ret_annuel.values))
-                if np.isnan(expected_portfolio_return) or np.isinf(expected_portfolio_return):
-                    expected_portfolio_return = 0.0
-
-                exposure_factor = min(1.0, target_volatility / port_vol_initial if port_vol_initial > 0 else 1.0)
-                vol_cash_pct = 1.0 - exposure_factor
-                reserve_cash_pct = max(min_cash_pct, vol_cash_pct)
-                budget_invest = budget_satellite * (1.0 - reserve_cash_pct)
-
-                if tail_hedge_active:
-                    budget_tail_risk = budget_invest * 0.30
-                    budget_invest -= budget_tail_risk
-
-                allocations_satellite = pd.Series(poids_optimaux * budget_invest, index=actifs_bl)
-                
-                # Éliminer les allocations trop petites (pas rentable avec frais TR)
-                for _ in range(3):
-                    trop_petit = allocations_satellite[allocations_satellite < min_trade_size]
-                    assez_grand = allocations_satellite[allocations_satellite >= min_trade_size]
-                    if len(trop_petit) == 0 or len(assez_grand) == 0:
-                        break
-                    montant_redistribue = trop_petit.sum()
-                    allocations_satellite = assez_grand.copy()
-                    allocations_satellite *= (1 + montant_redistribue / assez_grand.sum())
-                if (allocations_satellite < min_trade_size).all() and len(allocations_satellite) > 0:
-                    meilleur = allocations_satellite.idxmax()
-                    allocations_satellite = pd.Series({meilleur: budget_invest})
-
-            except Exception as e:
-                logger.error(f"Optimisation BL échouée : {e}")
-
-reserve_cash = budget_satellite * reserve_cash_pct
-
-# Agréger allocations cœur + satellite
-allocations = pd.Series(dtype=float)
-for _, row in st.session_state.mon_portefeuille.iterrows():
-    actif = row["Actif"]
-    if row.get("Cœur", False) and actif in univers_etudie:
-        allocations[actif] = dict_actuel.get(actif, 0.0)
-
-for actif, val in allocations_satellite.items():
-    allocations[actif] = allocations.get(actif, 0.0) + val
-if tail_hedge_active:
-    allocations["Bons du Trésor US 20A+"] = allocations.get("Bons du Trésor US 20A+", 0.0) + budget_tail_risk
-
-
-# ==========================================
-# 5. PCA
-# ==========================================
-pca_explained_variance = [0, 0]
-if len(allocations) > 1:
-    try:
-        actifs_pca = [a for a in allocations.index if a in rendements_propres.columns]
-        if len(actifs_pca) > 1:
-            pca = PCA(n_components=min(2, len(actifs_pca)))
-            pca.fit(rendements_propres[actifs_pca])
-            pca_explained_variance = list(pca.explained_variance_ratio_ * 100)
-    except Exception as e:
-        logger.warning(f"PCA échouée : {e}")
-
-
-# ==========================================
-# 6. BILAN DE SANTÉ PAR POSITION (nouveau V36)
-# ==========================================
-def calculer_sante_position(actif_nom, rendements, vol, mdd, corr_matrix, df_prix, taux, all_actifs_port):
-    """Calcule un diagnostic complet pour une position du portefeuille."""
-    if actif_nom not in univers_etudie:
-        return None
-    ticker = univers_etudie[actif_nom]["ticker"]
-    if ticker not in df_prix.columns:
-        return None
-
-    resultats = {"actif": actif_nom, "ticker": ticker}
-
-    # Momentum
-    prix = df_prix[ticker].dropna()
-    if len(prix) > 200:
-        sma50 = prix.tail(50).mean()
-        sma200 = prix.tail(200).mean()
-        prix_actuel = float(prix.iloc[-1])
-        resultats["au_dessus_sma50"] = prix_actuel > sma50
-        resultats["au_dessus_sma200"] = prix_actuel > sma200
-        resultats["distance_sma200_pct"] = ((prix_actuel / sma200) - 1) * 100
-    else:
-        resultats["au_dessus_sma50"] = None
-        resultats["au_dessus_sma200"] = None
-        resultats["distance_sma200_pct"] = 0
-
-    # Volatilité
-    resultats["volatilite_annualisee"] = float(vol.get(actif_nom, 0)) if actif_nom in vol.index else 0
-
-    # Max drawdown
-    resultats["max_drawdown"] = float(mdd.get(actif_nom, 0)) if actif_nom in mdd.index else 0
-
-    # Sortino
-    resultats["sortino"] = float(sortino_brut.get(actif_nom, 0)) if actif_nom in sortino_brut.index else 0
-
-    # Corrélation moyenne avec le reste du portefeuille
-    autres = [a for a in all_actifs_port if a != actif_nom and a in corr_matrix.index]
-    if actif_nom in corr_matrix.index and len(autres) > 0:
-        corr_moyenne = corr_matrix.loc[actif_nom, autres].mean()
-        resultats["correlation_moyenne"] = float(corr_moyenne)
-    else:
-        resultats["correlation_moyenne"] = 0.0
-
-    # Score de santé global (0-100)
-    score = 50  # Base neutre
-    if resultats["au_dessus_sma200"]:
-        score += 15
-    elif resultats["au_dessus_sma200"] is False:
-        score -= 20
-    if resultats["au_dessus_sma50"]:
-        score += 10
-    elif resultats["au_dessus_sma50"] is False:
-        score -= 10
-    if resultats["sortino"] > 1.0:
-        score += 15
-    elif resultats["sortino"] < 0:
-        score -= 15
-    if resultats["volatilite_annualisee"] < 0.20:
-        score += 10
-    elif resultats["volatilite_annualisee"] > 0.40:
-        score -= 10
-    if resultats["correlation_moyenne"] < 0.3:
-        score += 10  # Bonne diversification
-    elif resultats["correlation_moyenne"] > 0.7:
-        score -= 10
-
-    resultats["score_sante"] = max(0, min(100, score))
-
-    # Recommandation
-    if resultats["score_sante"] >= 70:
-        resultats["recommandation"] = "▲ RENFORCER"
-    elif resultats["score_sante"] >= 40:
-        resultats["recommandation"] = "■ CONSERVER"
-    else:
-        resultats["recommandation"] = "▼ ALLÉGER"
-
-    return resultats
-
-
-# Calculer la santé de chaque position
 actifs_portefeuille = st.session_state.mon_portefeuille["Actif"].tolist()
-sante_positions = []
-for actif in actifs_portefeuille:
-    s = calculer_sante_position(
-        actif, rendements_hebdo, volatilite, max_dd, correlation,
-        df_brut, taux_fx, actifs_portefeuille
+actifs_verrouilles = [r["Actif"] for _, r in st.session_state.mon_portefeuille.iterrows() if r.get("Coeur", False)]
+
+eligibles = [a for a in univers_etudie if a in vol.index and not pd.isna(vol.get(a, np.nan)) and vol[a] <= 0.60 and max_dd.get(a, -1) >= -0.45 and a != "Bons du Tresor US 20A+"]
+top_candidats = sortino.reindex(eligibles).dropna().sort_values(ascending=False).head(30).index.tolist()
+
+fund_data = []
+for c in top_candidats:
+    t = univers_etudie[c]["ticker"]
+    if t not in df_brut.columns: continue
+    p_brut = float(df_brut[t].iloc[-1])
+    sma200 = float(df_brut[t].tail(200).mean())
+    trend = (p_brut / sma200 - 1) if sma200 > 0 else 0
+    pe, roe, cons = 15.0, 0.15, 3.0
+    is_etf = est_etf_ou_crypto(univers_etudie[c]["nom"])
+    if not is_etf:
+        f = obtenir_fondamentaux(t)
+        pe_r, roe_r, cons_r = f.get("trailingPE"), f.get("returnOnEquity"), f.get("recommendationMean")
+        # FORTERESSE: rejeter PE negatif ou ROE negatif
+        if pe_r is not None and pe_r < 0: continue
+        if roe_r is not None and roe_r < 0: continue
+        if pe_r is not None and 0 < pe_r < 100: pe = pe_r
+        elif pe_r is not None and pe_r > 100: continue
+        if roe_r is not None: roe = roe_r
+        if cons_r is not None: cons = cons_r
+    fund_data.append({"Actif": c, "P/E": pe, "ROE": roe, "Consensus": cons, "Sortino": sortino.get(c, 0), "Tendance": trend})
+
+df_z = pd.DataFrame(fund_data)
+if not df_z.empty:
+    df_z["Score_Global"] = (
+        -calculate_z_score(df_z["P/E"]).fillna(0)
+        + calculate_z_score(df_z["ROE"]).fillna(0) * 1.5  # Surponderer la qualite
+        + calculate_z_score(df_z["Sortino"]).fillna(0)
+        - calculate_z_score(df_z["Consensus"]).fillna(0)
+        + calculate_z_score(df_z["Tendance"]).fillna(0)
     )
-    if s:
-        sante_positions.append(s)
-
-# Score de diversification global
-def calculer_score_diversification(actifs_port, corr_matrix):
-    """Score de 0 (tout corrélé) à 100 (parfaitement diversifié)."""
-    valides = [a for a in actifs_port if a in corr_matrix.index]
-    if len(valides) < 2:
-        return 50
-    sous_matrice = corr_matrix.loc[valides, valides]
-    n = len(valides)
-    # Moyenne des corrélations hors diagonale
-    masque = ~np.eye(n, dtype=bool)
-    corr_moy = abs(sous_matrice.values[masque]).mean()
-    # Score inversé : moins c'est corrélé, mieux c'est
-    score = int((1 - corr_moy) * 100)
-    return max(0, min(100, score))
-
-score_diversification = calculer_score_diversification(actifs_portefeuille, correlation)
-
+    top_ranked = df_z.sort_values("Score_Global", ascending=False)["Actif"].tolist()
+else:
+    top_ranked = []
 
 # ==========================================
-# SYSTEME D'ALERTES (sidebar, après calculs)
+# SMART SWAP OMS (systeme clos)
+# ==========================================
+capital_coeur = sum(dict_actuel.get(a, 0) for a in actifs_verrouilles)
+capital_satellite = max(0, budget - capital_coeur)
+
+# Trouver le meilleur candidat externe (pas deja en portefeuille)
+meilleur_candidat = None
+meilleur_score = -np.inf
+for c in top_ranked:
+    if c in actifs_portefeuille: continue
+    if c not in correlation.index: continue
+    sc = df_z.loc[df_z["Actif"] == c, "Score_Global"].values
+    if len(sc) > 0 and sc[0] > meilleur_score:
+        meilleur_score = sc[0]
+        meilleur_candidat = c
+
+# Trouver la position satellite la plus faible
+pire_satellite = None
+pire_score = np.inf
+for a in actifs_portefeuille:
+    if a in actifs_verrouilles: continue
+    if dict_actuel.get(a, 0) <= 0: continue
+    sc = df_z.loc[df_z["Actif"] == a, "Score_Global"].values
+    a_score = sc[0] if len(sc) > 0 else 0
+    if a_score < pire_score:
+        pire_score = a_score
+        pire_satellite = a
+
+# Decision de swap
+swap_recommande = False
+swap_vente = None
+swap_achat = None
+swap_raison = ""
+if meilleur_candidat and pire_satellite:
+    ecart = meilleur_score - pire_score
+    val_vente = dict_actuel.get(pire_satellite, 0)
+    frais_swap = 2 * FRAIS_ORDRE_TR + val_vente * SPREAD_ESTIME_TR * 2
+    pnl_vente = val_vente - dict_pru.get(pire_satellite, val_vente)
+    eco_fiscale = abs(pnl_vente) * FLAT_TAX_FR if pnl_vente < 0 else 0
+    flat_tax_vente = max(0, pnl_vente) * FLAT_TAX_FR
+
+    if ecart >= HURDLE_RATE and val_vente >= 50:
+        swap_recommande = True
+        swap_vente = pire_satellite
+        swap_achat = meilleur_candidat
+        swap_raison = f"Ecart Z-Score de {ecart:.2f} (seuil: {HURDLE_RATE})"
+
+# Sante des positions
+def calc_sante(actif):
+    if actif not in univers_etudie: return None
+    t = univers_etudie[actif]["ticker"]
+    if t not in df_brut.columns: return None
+    prix = df_brut[t].dropna()
+    if len(prix) < 200: return {"actif": actif, "score": 50, "sma200": None, "sma50": None, "vol": 0, "dd": 0, "sortino": 0, "corr_moy": 0}
+    p = float(prix.iloc[-1])
+    s200 = float(prix.tail(200).mean())
+    s50 = float(prix.tail(50).mean())
+    v = float(vol.get(actif, 0)) if actif in vol.index else 0
+    dd = float(max_dd.get(actif, 0)) if actif in max_dd.index else 0
+    so = float(sortino.get(actif, 0)) if actif in sortino.index else 0
+    autres = [x for x in actifs_portefeuille if x != actif and x in correlation.index]
+    cm = float(correlation.loc[actif, autres].mean()) if actif in correlation.index and autres else 0
+    sc = 50
+    if p > s200: sc += 15
+    else: sc -= 20
+    if p > s50: sc += 10
+    else: sc -= 10
+    if so > 1: sc += 15
+    elif so < 0: sc -= 15
+    if v < 0.20: sc += 10
+    elif v > 0.40: sc -= 10
+    if cm < 0.3: sc += 10
+    elif cm > 0.7: sc -= 10
+    return {"actif": actif, "score": max(0, min(100, sc)), "sma200": p > s200, "sma50": p > s50, "dist_sma200": (p/s200-1)*100, "vol": v, "dd": dd, "sortino": so, "corr_moy": cm}
+
+sante = [s for s in (calc_sante(a) for a in actifs_portefeuille) if s]
+score_div = 50
+valides_corr = [a for a in actifs_portefeuille if a in correlation.index]
+if len(valides_corr) > 1:
+    sub = correlation.loc[valides_corr, valides_corr]
+    mask = ~np.eye(len(valides_corr), dtype=bool)
+    score_div = int((1 - abs(sub.values[mask]).mean()) * 100)
+
+# ==========================================
+# ALERTES SIDEBAR
 # ==========================================
 st.sidebar.markdown("---")
-st.sidebar.markdown("<h3 style='font-family: monospace;'>ALERTES ACTIVES</h3>", unsafe_allow_html=True)
-
+st.sidebar.markdown("<h3 style='font-family:monospace;'>ALERTES</h3>", unsafe_allow_html=True)
 alertes = []
-if vix_actuel > seuil_vix:
-    alertes.append(("CRITIQUE", f"VIX a {vix_actuel:.1f} > seuil {seuil_vix}"))
-if risk_score >= 70:
-    alertes.append(("CRITIQUE", f"Score risque {risk_score}/100 — regime krach"))
-elif risk_score >= 40:
-    alertes.append(("ATTENTION", f"Score risque {risk_score}/100 — regime defensif"))
-if curve_inverted:
-    alertes.append(("ATTENTION", "Courbe des taux inversee"))
-if credit_stress:
-    alertes.append(("ATTENTION", "Stress sur le credit detecte"))
-if sp500_close < sp500_sma200:
-    alertes.append(("ATTENTION", "S&P 500 sous sa SMA 200"))
-
+if vix > seuil_vix: alertes.append(("CRITIQUE", f"VIX {vix:.0f} > {seuil_vix}"))
+if risk_score >= 70: alertes.append(("CRITIQUE", f"Score risque {risk_score}/100"))
+elif risk_score >= 40: alertes.append(("ATTENTION", f"Score risque {risk_score}/100"))
+if curve_inv: alertes.append(("ATTENTION", "Courbe inversee"))
+if sp_close < sp_sma200: alertes.append(("ATTENTION", "S&P sous SMA200"))
+if swap_recommande: alertes.append(("INFO", f"Swap recommande: {swap_vente} -> {swap_achat}"))
+for s in sante:
+    if s["score"] < 30: alertes.append(("CRITIQUE", f"{s['actif']}: sante {s['score']}/100"))
 if alertes:
-    for niveau, msg in alertes:
-        if niveau == "CRITIQUE":
-            st.sidebar.error(f"[{niveau}] {msg}")
-        else:
-            st.sidebar.warning(f"[{niveau}] {msg}")
+    for n, m in alertes:
+        (st.sidebar.error if n == "CRITIQUE" else st.sidebar.warning if n == "ATTENTION" else st.sidebar.info)(f"[{n}] {m}")
 else:
-    st.sidebar.success("Aucune alerte active")
-
+    st.sidebar.success("Portefeuille sain. Ne touchez a rien.")
 
 # ==========================================
-# INTERFACE PRINCIPALE
+# INTERFACE
 # ==========================================
-st.markdown(
-    "<h2 style='font-family: JetBrains Mono, monospace; border-bottom: 1px solid #1a1a2e; "
-    "padding-bottom: 10px; letter-spacing: 0.08em; font-weight: 400;'>BUREAU CONSEIL &amp; EXECUTION</h2>",
-    unsafe_allow_html=True,
-)
+st.markdown("<h2 style='font-family:JetBrains Mono,monospace;border-bottom:1px solid #1a1a2e;padding-bottom:10px;letter-spacing:0.08em;font-weight:400;'>BUREAU CONSEIL &amp; EXECUTION</h2>", unsafe_allow_html=True)
 
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric(
-    "METEO MARCHE (IA)", regime_marche,
-    delta=f"Score Risque: {risk_score}/100",
-    delta_color="normal" if risk_score < 40 else "inverse",
-)
-hmm_label = f"{hmm_proba_krach:.0%}" if HMM_DISPONIBLE else "N/A"
-col2.metric(
-    "PROBA KRACH HMM", hmm_label,
-    delta=f"Regime: {hmm_regime_names.get(hmm_regime_actuel, '?')}" if HMM_DISPONIBLE else "hmmlearn requis",
-    delta_color="inverse" if hmm_proba_krach > 0.20 else "normal",
-)
-col3.metric(
-    "COEUR SECURISE", f"{capital_verrouille:.2f} €",
-    delta="Sanctuarise", delta_color="off",
-)
-col4.metric(
-    "SATELLITE ACTIF", f"{budget_satellite:.2f} €",
-    delta="Gere par l'IA", delta_color="normal",
-)
-reserve_pct_display = (reserve_cash / budget * 100) if budget > 0 else 0
-col5.metric(
-    "LIQUIDITES", f"{reserve_cash:.2f} €",
-    delta=f"{reserve_pct_display:.1f}% protection", delta_color="off",
-)
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("REGIME", regime, delta=f"Risque: {risk_score}/100", delta_color="inverse" if risk_score >= 40 else "normal")
+c2.metric("HMM KRACH", f"{hmm_proba_krach:.0%}" if HMM_DISPONIBLE else "N/A", delta=hmm_names.get(hmm_regime, "?") if HMM_DISPONIBLE else "")
+c3.metric("COEUR", f"{capital_coeur:.0f} EUR")
+c4.metric("SATELLITE", f"{capital_satellite:.0f} EUR")
+c5.metric("DIVERSIFICATION", f"{score_div}/100")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
-    "CONSEIL & EXECUTION",
-    "ALLOCATION CIBLE",
-    "BILAN DE SANTE",
-    "DIVERSIFICATION",
-    "PROJECTIONS MONTE CARLO",
-    "ASSISTANT DCA",
-    "BACKTEST WALK-FORWARD",
-    "MACRO & IA",
-    "ANALYSE PCA",
-    "STRESS-TESTS",
-])
+tab1, tab2, tab3, tab4 = st.tabs(["GESTION & ARBITRAGE", "RADAR A PEPITES", "SANTE DES FORTERESSES", "MACRO & IA"])
 
-
-# =================================================================
-# ONGLET 1 : CONSEIL & EXÉCUTION
-# =================================================================
+# ==========================================
+# TAB 1 : OMS SMART SWAP
+# ==========================================
 with tab1:
-    # --- SECTION 1 : POSITIONS LIVE (pleine largeur) ---
     st.markdown("<p class='section-header'>POSITIONS — MARK-TO-MARKET</p>", unsafe_allow_html=True)
+    df_disp = st.session_state.mon_portefeuille.copy()
+    df_disp["Valeur Live"] = df_disp["Actif"].map(lambda a: round(dict_actuel.get(a, 0), 2))
+    df_disp["P&L"] = df_disp.apply(lambda r: round(dict_actuel.get(r["Actif"], 0) - r.get("Quantite", 0) * r.get("PRU / Part", 0), 2), axis=1)
+    df_disp["Poids %"] = df_disp["Valeur Live"].apply(lambda v: round(v/budget*100, 1) if budget > 0 else 0)
 
-    # Préparer le DataFrame d'affichage enrichi
-    df_display = st.session_state.mon_portefeuille.copy()
-    df_display["Valeur Live"] = df_display["Actif"].map(lambda a: round(dict_actuel.get(a, 0.0), 2))
-    df_display["P&L"] = df_display.apply(
-        lambda r: round(dict_actuel.get(r["Actif"], 0) - r.get("Quantité", 0) * r.get("PRU / Part (EUR)", 0), 2), axis=1
-    )
-    df_display["Poids %"] = df_display["Valeur Live"].apply(
-        lambda v: round(v / budget * 100, 1) if budget > 0 else 0
-    )
-
-    config_colonnes = {
-        "Actif": st.column_config.SelectboxColumn("Instrument", options=list(univers_etudie.keys()), required=True, width="medium"),
-        "Quantité": st.column_config.NumberColumn("Parts", min_value=0.0, step=0.001, format="%.4f", width="small"),
-        "PRU / Part (EUR)": st.column_config.NumberColumn("PRU/Part", min_value=0.0, step=0.1, format="%.2f", width="small"),
-        "Cœur": st.column_config.CheckboxColumn("Cœur", width="small"),
-        "Valeur Live": st.column_config.NumberColumn("Valeur Live (EUR)", format="%.2f", width="small"),
-        "P&L": st.column_config.NumberColumn("P&L (EUR)", format="%.2f", width="small"),
-        "Poids %": st.column_config.NumberColumn("Poids %", format="%.1f", width="small"),
+    cfg = {
+        "Actif": st.column_config.SelectboxColumn("Instrument", options=list(univers_etudie.keys()), required=True),
+        "Quantite": st.column_config.NumberColumn("Parts", min_value=0.0, step=0.001, format="%.4f"),
+        "PRU / Part": st.column_config.NumberColumn("PRU/Part", min_value=0.0, step=0.1, format="%.2f"),
+        "Coeur": st.column_config.CheckboxColumn("Coeur"),
+        "Valeur Live": st.column_config.NumberColumn("Live (EUR)", format="%.2f"),
+        "P&L": st.column_config.NumberColumn("P&L", format="%.2f"),
+        "Poids %": st.column_config.NumberColumn("%", format="%.1f"),
     }
-    df_edited = st.data_editor(
-        df_display,
-        column_config=config_colonnes,
-        use_container_width=True,
-        num_rows="dynamic",
-        disabled=["Valeur Live", "P&L", "Poids %"],
-        key="portfolio_editor",
-    )
+    df_ed = st.data_editor(df_disp, column_config=cfg, use_container_width=True, num_rows="dynamic", disabled=["Valeur Live", "P&L", "Poids %"], key="ed")
+    df_cl = df_ed.dropna(subset=["Actif"])
+    df_cl = df_cl[df_cl["Actif"].isin(univers_etudie.keys())].drop_duplicates(subset=["Actif"], keep="first")
+    df_cl["Quantite"] = pd.to_numeric(df_cl["Quantite"], errors="coerce").clip(lower=0).fillna(0)
+    df_cl["PRU / Part"] = pd.to_numeric(df_cl["PRU / Part"], errors="coerce").clip(lower=0).fillna(0)
+    if "Coeur" not in df_cl.columns: df_cl["Coeur"] = False
+    st.session_state.mon_portefeuille = df_cl[["Actif", "Quantite", "PRU / Part", "Coeur"]].reset_index(drop=True)
 
-    # Sauvegarder uniquement les colonnes éditables
-    df_edited_clean = df_edited.dropna(subset=["Actif"])
-    df_edited_clean = df_edited_clean[df_edited_clean["Actif"].isin(univers_etudie.keys())]
-    df_edited_clean = df_edited_clean.drop_duplicates(subset=["Actif"], keep="first")
-    df_edited_clean["Quantité"] = pd.to_numeric(df_edited_clean["Quantité"], errors="coerce").clip(lower=0).fillna(0)
-    if "PRU / Part (EUR)" not in df_edited_clean.columns:
-        df_edited_clean["PRU / Part (EUR)"] = 0.0
-    df_edited_clean["PRU / Part (EUR)"] = pd.to_numeric(df_edited_clean["PRU / Part (EUR)"], errors="coerce").clip(lower=0).fillna(0)
-    if "Cœur" not in df_edited_clean.columns:
-        df_edited_clean["Cœur"] = False
-    cols_save = ["Actif", "Quantité", "PRU / Part (EUR)", "Cœur"]
-    st.session_state.mon_portefeuille = df_edited_clean[[c for c in cols_save if c in df_edited_clean.columns]].reset_index(drop=True)
-
-    # Recalculer dict_actuel après édition
-    for _, row in st.session_state.mon_portefeuille.iterrows():
-        actif = row["Actif"]
-        if pd.notna(actif) and actif in univers_etudie:
-            qty = float(row.get("Quantité", 0))
-            dict_actuel[actif] = valoriser_position(actif, qty, df_brut, taux_fx)
-            dict_pru[actif] = qty * float(row.get("PRU / Part (EUR)", 0))
-            dict_quantite[actif] = qty
-
-    # Résumé compact
     total_pnl = sum(dict_actuel.get(a, 0) - dict_pru.get(a, 0) for a in dict_actuel)
-    pnl_color = "#00c853" if total_pnl >= 0 else "#ff1744"
-    st.markdown(
-        f"<div style='display:flex; gap:40px; padding:8px 0;'>"
-        f"<span style='font-family:JetBrains Mono,monospace; font-size:0.8rem; color:#6c7293;'>"
-        f"TOTAL INVESTI : <b style='color:white'>{sum(dict_pru.values()):.2f} EUR</b></span>"
-        f"<span style='font-family:JetBrains Mono,monospace; font-size:0.8rem; color:#6c7293;'>"
-        f"VALEUR LIVE : <b style='color:white'>{sum(dict_actuel.values()):.2f} EUR</b></span>"
-        f"<span style='font-family:JetBrains Mono,monospace; font-size:0.8rem; color:#6c7293;'>"
-        f"P&L TOTAL : <b style='color:{pnl_color}'>{total_pnl:+.2f} EUR</b></span>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
+    pc = "#00c853" if total_pnl >= 0 else "#ff1744"
+    st.markdown(f"<div style='display:flex;gap:40px;padding:8px 0;'><span style='font-family:JetBrains Mono;font-size:0.8rem;color:#6c7293;'>INVESTI: <b style='color:white'>{sum(dict_pru.values()):.2f} EUR</b></span><span style='font-family:JetBrains Mono;font-size:0.8rem;color:#6c7293;'>LIVE: <b style='color:white'>{budget_actions:.2f} EUR</b></span><span style='font-family:JetBrains Mono;font-size:0.8rem;color:#6c7293;'>P&L: <b style='color:{pc}'>{total_pnl:+.2f} EUR</b></span></div>", unsafe_allow_html=True)
 
     st.markdown("---")
+    st.markdown("<p class='section-header'>RECOMMANDATION SMART SWAP</p>", unsafe_allow_html=True)
 
-    # --- SECTION 2 : TICKET D'ORDRES (pleine largeur) ---
-    st.markdown("<p class='section-header'>TICKET D'ORDRES — OPTIMISATION FISCALE ACTIVE</p>", unsafe_allow_html=True)
-    lignes_ordres = []
-    if len(allocations) > 0:
-        tous_actifs_ordres = set(allocations[allocations > 0].index) | set(dict_actuel.keys())
-        for a in tous_actifs_ordres:
-            if a not in univers_etudie:
-                continue
-            val_cible_raw = allocations.get(a, 0.0)
-            val_cible = float(val_cible_raw) if pd.notna(val_cible_raw) else 0.0
-            val_actuelle = float(dict_actuel.get(a, 0.0))
-            pru = float(dict_pru.get(a, val_actuelle))
-            delta = val_cible - val_actuelle
-            pnl = val_actuelle - pru
+    if swap_recommande:
+        val_v = dict_actuel.get(swap_vente, 0)
+        pnl_v = val_v - dict_pru.get(swap_vente, val_v)
+        ftax = max(0, pnl_v) * FLAT_TAX_FR
+        frais = 2 * FRAIS_ORDRE_TR
+        montant_net = val_v - ftax - frais
+        z_v = df_z.loc[df_z["Actif"] == swap_vente, "Score_Global"].values
+        z_a = df_z.loc[df_z["Actif"] == swap_achat, "Score_Global"].values
 
-            atr_info = atr_data.get(a, {})
-            stop_hit = atr_info.get("stop_touche", False)
-            est_verrouille = a in actifs_verrouilles
-
-            if stop_hit and val_actuelle > 0 and not est_verrouille:
-                action = "VENDRE [STOP]"
-                delta = -val_actuelle
-            elif abs(delta) < min_trade_size:
-                action = "CONSERVER"
-            elif delta > 0:
-                action = "ACHETER"
-            else:
-                action = "VENDRE"
-
-            frais = FRAIS_ORDRE_TR + abs(delta) * SPREAD_ESTIME_TR if action != "CONSERVER" else 0.0
-            flat_tax_hit = max(0, pnl) * FLAT_TAX_FR if "VENDRE" in action else 0.0
-
-            if abs(delta) > 0.01:
-                lignes_ordres.append({
-                    "Instrument": univers_etudie[a]["nom"],
-                    "Cible": val_cible, "Actuel": val_actuelle,
-                    "Ordre Net": delta, "P&L": pnl,
-                    "Flat Tax 30%": flat_tax_hit,
-                    "Frais TR": frais,
-                    "Action": action,
-                })
-
-        # Tax-Loss Harvesting : trier les ventes — MV d'abord
-        ventes = [i for i, o in enumerate(lignes_ordres) if "VENDRE" in o["Action"]]
-        if len(ventes) > 1:
-            ventes_data = sorted([lignes_ordres[i] for i in ventes], key=lambda x: x["P&L"])
-            for j, i in enumerate(ventes):
-                lignes_ordres[i] = ventes_data[j]
-
-    if lignes_ordres:
-        df_ordres = pd.DataFrame(lignes_ordres).sort_values("Ordre Net", ascending=False)
-        cols_show = ["Instrument", "Cible", "Actuel", "Ordre Net", "P&L", "Flat Tax 30%", "Frais TR", "Action"]
-        total_frais = sum(r["Frais TR"] for r in lignes_ordres if r["Action"] != "CONSERVER")
-        total_tax = sum(r["Flat Tax 30%"] for r in lignes_ordres if "VENDRE" in r["Action"])
-        eco_fisc = sum(abs(r["P&L"]) * FLAT_TAX_FR for r in lignes_ordres if "VENDRE" in r["Action"] and r["P&L"] < 0)
-        st.dataframe(
-            df_ordres[cols_show].style.format({
-                "Cible": "{:.2f} €", "Actuel": "{:.2f} €",
-                "Ordre Net": "{:+.2f} €", "P&L": "{:+.2f} €",
-                "Flat Tax 30%": "{:.2f} €", "Frais TR": "{:.2f} €",
-            }).map(
-                lambda x: (
-                    "color: #00c853; font-weight: bold;" if x == "ACHETER"
-                    else ("color: #ff1744; font-weight: bold;" if "VENDRE" in str(x) else "color: #6c7293;")
-                ), subset=["Action"],
-            ), use_container_width=True,
-        )
-        c1, c2, c3 = st.columns(3)
-        if total_frais > 0:
-            c1.caption(f"Frais TR : **{total_frais:.2f} EUR**")
-        if total_tax > 0:
-            c2.caption(f"Flat Tax estimee : **{total_tax:.2f} EUR**")
-        if eco_fisc > 0:
-            c3.caption(f"Economie fiscale (vente en MV) : **{eco_fisc:.2f} EUR**")
+        col_sw1, col_sw2, col_sw3 = st.columns(3)
+        col_sw1.error(f"VENDRE: {swap_vente}\nValeur: {val_v:.2f} EUR\nP&L: {pnl_v:+.2f} EUR\nZ-Score: {z_v[0]:.2f}" if len(z_v) > 0 else f"VENDRE: {swap_vente}")
+        col_sw2.success(f"ACHETER: {swap_achat}\nMontant: {montant_net:.2f} EUR\nZ-Score: {z_a[0]:.2f}" if len(z_a) > 0 else f"ACHETER: {swap_achat}")
+        col_sw3.info(f"Frais: {frais:.2f} EUR\nFlat Tax: {ftax:.2f} EUR\n{'Eco fiscale (MV): ' + str(round(abs(pnl_v)*FLAT_TAX_FR,2)) + ' EUR' if pnl_v < 0 else ''}\nRaison: {swap_raison}")
     else:
-        st.success("Portefeuille optimisé. Aucun ordre nécessaire.")
+        st.success("PORTEFEUILLE SAIN — AUCUN ARBITRAGE NECESSAIRE. Le radar n'a identifie aucune opportunite justifiant un swap avec le hurdle rate actuel.")
 
-    st.markdown("---")
-    st.markdown("<p class='section-header'>DIAGNOSTIC — JUSTIFICATION DES RECOMMANDATIONS</p>", unsafe_allow_html=True)
-
-    st.info(
-        f"**Vision Macroéconomique :** Le logiciel détecte un **{regime_marche}**. "
-        f"Score de panique médiatique (NLP) : {avg_nlp_score:.2f}. "
-        f"Consigne : conserver **{reserve_cash:.2f} € en liquidités** "
-        f"pour respecter votre cible de volatilité de {target_volatility * 100:.0f}%."
-    )
-
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        st.markdown("#### ORDRES DE VENTE — RATIONALE")
-        a_vendre = [r["Instrument"] for r in lignes_ordres if r["Action"] == "VENDRE"]
-        if not a_vendre:
-            st.write("Aucune vente recommandée. Vos actifs non-verrouillés restent pertinents.")
-        else:
-            for instr in a_vendre:
-                ticker = next((k for k, v in univers_etudie.items() if v["nom"] == instr), None)
-                if ticker:
-                    z = df_zscore.loc[df_zscore["Actif"] == ticker, "Score_Global"].values
-                    z_val = z[0] if len(z) > 0 else -99
-                    if z_val == -99:
-                        st.write(f"- **{instr} :** Fondamentaux ou momentum trop dégradés.")
-                    elif z_val < 0:
-                        st.write(f"- **{instr} :** Score Qualité négatif ({z_val:.2f}). D'autres actifs offrent un meilleur ratio risque/rendement.")
-                    else:
-                        st.write(f"- **{instr} :** Surpondéré par rapport au risque global. Prise de profits recommandée.")
-
-    with col_c2:
-        st.markdown("#### ORDRES D'ACHAT — RATIONALE")
-        a_acheter = [r["Instrument"] for r in lignes_ordres if r["Action"] == "ACHETER"]
-        if not a_acheter:
-            st.write("Aucun achat recommandé. Le portefeuille actuel est bien positionné.")
-        else:
-            for instr in a_acheter:
-                ticker = next((k for k, v in univers_etudie.items() if v["nom"] == instr), None)
-                if ticker == "Bons du Trésor US 20A+":
-                    st.write(f"- **{instr} :** Couverture d'urgence anti-krach activée.")
-                elif ticker:
-                    z = df_zscore.loc[df_zscore["Actif"] == ticker, "Score_Global"].values
-                    z_val = z[0] if len(z) > 0 else 0
-                    pred = ml_predictions.get(ticker, 0)
-                    ml_txt = "ML prédit une hausse." if pred > 0 else "Fondamentaux solides."
-                    st.write(f"- **{instr} :** Score Global **{z_val:.2f}**. {ml_txt}")
-
-
-# =================================================================
-# ONGLET 2 : MATRICE D'ALLOCATION
-# =================================================================
+# ==========================================
+# TAB 2 : RADAR
+# ==========================================
 with tab2:
-    col_k1, col_k2, col_k3, col_k4 = st.columns(4)
-    ret_display = f"{expected_portfolio_return * 100:.1f}%" if not np.isnan(expected_portfolio_return) else "N/A"
-    sharpe_display = f"{expected_portfolio_return / port_vol_initial:.2f}" if port_vol_initial > 0 else "N/A"
-    col_k1.metric("Rendement Annuel Espéré", ret_display)
-    col_k2.metric("Ratio de Sharpe", sharpe_display)
-    ml_actif = any(v != 0 for v in ml_predictions.values())
-    col_k3.metric("Boost Prédictif (IA)", "ACTIF" if ml_actif else "INACTIF", "Gradient Boosting (9 features)")
-    col_k4.metric("Covariance sous Stress", "ACTIVE", "Blend Normal/Crash 70/30")
+    st.markdown("<p class='section-header'>TOP 20 — CLASSEMENT MONDIAL PAR Z-SCORE FORTERESSE</p>", unsafe_allow_html=True)
+    if not df_z.empty:
+        top20 = df_z.sort_values("Score_Global", ascending=False).head(20)
+        tab_data = []
+        for _, r in top20.iterrows():
+            a = r["Actif"]
+            en_ptf = "OUI" if a in actifs_portefeuille else ""
+            coeur = "COEUR" if a in actifs_verrouilles else ""
+            tab_data.append({
+                "Instrument": f"{univers_etudie[a]['nom']} [{univers_etudie[a]['ticker']}]",
+                "Z-Score": round(r["Score_Global"], 2),
+                "P/E": round(r["P/E"], 1), "ROE": f"{r['ROE']*100:.1f}%",
+                "Sortino": round(r["Sortino"], 2),
+                "En portefeuille": en_ptf, "Statut": coeur,
+            })
+        st.dataframe(pd.DataFrame(tab_data), use_container_width=True, height=500)
+    else:
+        st.warning("Aucune donnee disponible.")
 
-    tous_actifs_tab = list(dict.fromkeys(list(allocations.index) + top_20_candidats[:15]))
-    donnees_tab = []
-    for a in tous_actifs_tab:
-        if a not in univers_etudie:
-            continue
-        statut = (
-            "VERROUILLÉ (CŒUR)" if a in actifs_verrouilles
-            else ("ALLOUÉ" if a in allocations and allocations.get(a, 0) > 0 else "REJETÉ")
-        )
-        z_str = "N/A"
-        if not df_zscore.empty and a in df_zscore["Actif"].values:
-            z_str = f"{df_zscore.loc[df_zscore['Actif'] == a, 'Score_Global'].values[0]:.2f}"
-        # Conversion robuste : jamais de None/NaN
-        cap_cible_raw = allocations.get(a, 0.0)
-        cap_cible = float(cap_cible_raw) if pd.notna(cap_cible_raw) else 0.0
-        donnees_tab.append({
-            "Instrument (Ticker)": f"{univers_etudie[a]['nom']} [{univers_etudie[a]['ticker']}]",
-            "Statut": statut,
-            "Score Qualité (Z)": z_str,
-            "Capital Cible": cap_cible,
-        })
-    if donnees_tab:
-        st.dataframe(
-            pd.DataFrame(donnees_tab).sort_values("Capital Cible", ascending=False)
-            .style.format({"Capital Cible": "{:.2f} €"})
-            .map(
-                lambda v: (
-                    "background-color: #2c3e50;" if "VERROUILLÉ" in str(v)
-                    else ("background-color: #1a4222;" if "ALLOUÉ" in str(v) else "color: #8b0000;")
-                ),
-                subset=["Statut"],
-            ),
-            use_container_width=True, height=450,
-        )
-
-
-# =================================================================
-# ONGLET 3 : BILAN DE SANTÉ (nouveau V36)
-# =================================================================
+# ==========================================
+# TAB 3 : SANTE DES FORTERESSES
+# ==========================================
 with tab3:
-    st.markdown("<p class='section-header'>DIAGNOSTIC INDIVIDUEL PAR POSITION</p>", unsafe_allow_html=True)
-    st.markdown(
-        f"**Score de diversification global : {score_diversification}/100** "
-        + ("&mdash; Excellent" if score_diversification >= 70 else "&mdash; Correct" if score_diversification >= 40 else "&mdash; Insuffisant")
-    )
-    st.markdown("---")
-
-    if sante_positions:
-        for sp in sorted(sante_positions, key=lambda x: x["score_sante"], reverse=True):
-            valeur_pos = dict_actuel.get(sp["actif"], 0)
-            poids_pct = (valeur_pos / budget * 100) if budget > 0 else 0
-
-            with st.expander(f"{sp['recommandation']}  **{sp['actif']}** — Santé: {sp['score_sante']}/100 — {poids_pct:.1f}% du portefeuille", expanded=False):
+    st.markdown(f"<p class='section-header'>DIAGNOSTIC — SCORE DIVERSIFICATION: {score_div}/100</p>", unsafe_allow_html=True)
+    if sante:
+        for sp in sorted(sante, key=lambda x: x["score"], reverse=True):
+            val = dict_actuel.get(sp["actif"], 0)
+            poids = val / budget * 100 if budget > 0 else 0
+            reco = "RENFORCER" if sp["score"] >= 70 else ("CONSERVER" if sp["score"] >= 40 else "ALLEGER")
+            icon = "▲" if reco == "RENFORCER" else ("■" if reco == "CONSERVER" else "▼")
+            with st.expander(f"{icon} {reco}  **{sp['actif']}** — Sante: {sp['score']}/100 — {poids:.1f}%", expanded=False):
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Score Santé", f"{sp['score_sante']}/100")
-                c2.metric("Volatilité", f"{sp['volatilite_annualisee']*100:.1f}%")
-                c3.metric("Max Drawdown", f"{sp['max_drawdown']*100:.1f}%")
+                c1.metric("Score", f"{sp['score']}/100")
+                c2.metric("Volatilite", f"{sp['vol']*100:.1f}%")
+                c3.metric("Max DD", f"{sp['dd']*100:.1f}%")
                 c4.metric("Sortino", f"{sp['sortino']:.2f}")
-
                 c5, c6, c7, c8 = st.columns(4)
-                sma200_txt = "OUI" if sp["au_dessus_sma200"] else ("NON" if sp["au_dessus_sma200"] is False else "N/A")
-                sma50_txt = "OUI" if sp["au_dessus_sma50"] else ("NON" if sp["au_dessus_sma50"] is False else "N/A")
-                c5.metric("Au-dessus SMA 200j", sma200_txt)
-                c6.metric("Au-dessus SMA 50j", sma50_txt)
-                c7.metric("Distance SMA 200j", f"{sp['distance_sma200_pct']:+.1f}%")
-                c8.metric("Correl. moy. portefeuille", f"{sp['correlation_moyenne']:.2f}")
+                c5.metric("SMA 200", "OUI" if sp.get("sma200") else ("NON" if sp.get("sma200") is False else "N/A"))
+                c6.metric("SMA 50", "OUI" if sp.get("sma50") else ("NON" if sp.get("sma50") is False else "N/A"))
+                c7.metric("Dist. SMA200", f"{sp.get('dist_sma200', 0):+.1f}%")
+                c8.metric("Correl. moy.", f"{sp['corr_moy']:.2f}")
+                t = univers_etudie[sp["actif"]]["ticker"]
+                if t in df_brut.columns:
+                    p6m = df_brut[t].tail(126).dropna()
+                    if len(p6m) > 10:
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=p6m.index, y=p6m.values, mode="lines", name="Prix", line=dict(color="#4a90e2")))
+                        if len(df_brut[t].dropna()) >= 200:
+                            sma = df_brut[t].rolling(200).mean().tail(126)
+                            fig.add_trace(go.Scatter(x=sma.index, y=sma.values, mode="lines", name="SMA200", line=dict(color="#ff6b6b", dash="dot")))
+                        fig.update_layout(template="plotly_dark", height=220, margin=dict(t=5,b=5,l=5,r=5))
+                        st.plotly_chart(fig, use_container_width=True)
 
-                # ATR Trailing Stop + Insider
-                atr_info = atr_data.get(sp["actif"], {})
-                insider_info_display = detecter_insider_buying(sp["ticker"]) if not est_etf_ou_crypto(univers_etudie.get(sp["actif"], {}).get("nom", "")) else {"signal": False, "detail": "N/A (ETF)"}
+    # Heatmap de correlation (deplacee depuis l'ancien onglet Diversification)
+    st.markdown("<p class='section-header'>MATRICE DE CORRELATION</p>", unsafe_allow_html=True)
+    vc = [a for a in actifs_portefeuille if a in correlation.index]
+    if len(vc) > 1:
+        cs = correlation.loc[vc, vc]
+        fig_h = go.Figure(data=go.Heatmap(z=cs.values, x=vc, y=vc, colorscale="RdBu_r", zmin=-1, zmax=1, text=np.round(cs.values, 2), texttemplate="%{text}"))
+        fig_h.update_layout(template="plotly_dark", height=450, margin=dict(t=10,b=10,l=10,r=10))
+        st.plotly_chart(fig_h, use_container_width=True)
 
-                c9, c10, c11, c12 = st.columns(4)
-                if atr_info.get("atr") is not None:
-                    c9.metric("ATR (14j)", f"{atr_info['atr']:.2f}")
-                    stop_val = atr_info.get("stop", 0)
-                    stop_status = "DECLENCHE" if atr_info.get("stop_touche") else f"{stop_val:.2f}"
-                    c10.metric("Trailing Stop (2xATR)", stop_status, delta_color="inverse" if atr_info.get("stop_touche") else "off")
-                else:
-                    c9.metric("ATR (14j)", "N/A")
-                    c10.metric("Trailing Stop", "N/A")
-                insider_txt = "ACHATS DETECTES" if insider_info_display.get("signal") else "Aucun signal"
-                c11.metric("Signal Insider", insider_txt)
-                c12.metric("Detail", insider_info_display.get("detail", "")[:30])
-
-                # Graphique de l'actif (6 mois)
-                ticker = sp["ticker"]
-                if ticker in df_brut.columns:
-                    prix_6m = df_brut[ticker].tail(126).dropna()
-                    if len(prix_6m) > 10:
-                        fig_prix = go.Figure()
-                        fig_prix.add_trace(go.Scatter(x=prix_6m.index, y=prix_6m.values, mode="lines", name="Prix", line=dict(color="#4a90e2")))
-                        if len(df_brut[ticker].dropna()) >= 200:
-                            sma200_series = df_brut[ticker].rolling(200).mean().tail(126)
-                            fig_prix.add_trace(go.Scatter(x=sma200_series.index, y=sma200_series.values, mode="lines", name="SMA 200", line=dict(color="#ff6b6b", dash="dot")))
-                        fig_prix.update_layout(template="plotly_dark", height=250, margin=dict(t=10, b=10, l=10, r=10), showlegend=True)
-                        st.plotly_chart(fig_prix, use_container_width=True)
-    else:
-        st.warning("Aucune position à analyser.")
-
-
-# =================================================================
-# ONGLET 4 : DIVERSIFICATION & CORRÉLATION (nouveau V36)
-# =================================================================
+# ==========================================
+# TAB 4 : MACRO & IA
+# ==========================================
 with tab4:
-    st.markdown("### MATRICE DE CORRELATION de votre Portefeuille")
-
-    actifs_corr = [a for a in actifs_portefeuille if a in correlation.index]
-    if len(actifs_corr) > 1:
-        corr_sub = correlation.loc[actifs_corr, actifs_corr]
-
-        fig_heatmap = go.Figure(data=go.Heatmap(
-            z=corr_sub.values,
-            x=corr_sub.columns.tolist(),
-            y=corr_sub.index.tolist(),
-            colorscale="RdBu_r",
-            zmin=-1, zmax=1,
-            text=np.round(corr_sub.values, 2),
-            texttemplate="%{text}",
-            textfont={"size": 11},
-        ))
-        fig_heatmap.update_layout(
-            template="plotly_dark", height=500,
-            margin=dict(t=10, b=10, l=10, r=10),
-        )
-        st.plotly_chart(fig_heatmap, use_container_width=True)
-
-        st.markdown(f"**Score de Diversification : {score_diversification}/100**")
-        st.markdown(
-            "Un score élevé signifie que vos actifs bougent indépendamment les uns des autres, "
-            "ce qui réduit le risque qu'ils chutent tous en même temps."
-        )
-
-        # Paires les plus corrélées
-        st.markdown("#### Paires les plus corrélées (risque de concentration)")
-        paires = []
-        for i, a1 in enumerate(actifs_corr):
-            for a2 in actifs_corr[i+1:]:
-                paires.append({"Actif 1": a1, "Actif 2": a2, "Corrélation": corr_sub.loc[a1, a2]})
-        if paires:
-            df_paires = pd.DataFrame(paires).sort_values("Corrélation", ascending=False)
-            alertes = df_paires[df_paires["Corrélation"] > 0.5]
-            if not alertes.empty:
-                st.dataframe(alertes.style.format({"Corrélation": "{:.2f}"}), use_container_width=True)
-            else:
-                st.success("Aucune paire n'a une corrélation supérieure à 0.50. Votre diversification est bonne.")
-    else:
-        st.warning("Il faut au moins 2 positions pour analyser la diversification.")
-
-
-# =================================================================
-# ONGLET 5 : PROJECTIONS MONTE CARLO (nouveau V36)
-# =================================================================
-with tab5:
-    st.markdown("### PROJECTIONS MONTE CARLO de votre portefeuille")
-    st.markdown("*Simulation de 1000 trajectoires possibles sur 1 an, basée sur les rendements historiques de vos actifs.*")
-
-    actifs_mc = [a for a in actifs_portefeuille if a in rendements_hebdo.columns]
-    if len(actifs_mc) > 0 and budget > 0:
-        # Poids du portefeuille actuel
-        poids_mc = np.array([dict_actuel.get(a, 0) for a in actifs_mc])
-        if poids_mc.sum() > 0:
-            poids_mc = poids_mc / poids_mc.sum()
-        else:
-            poids_mc = np.ones(len(actifs_mc)) / len(actifs_mc)
-
-        ret_mc = rendements_hebdo[actifs_mc].dropna()
-        mu_hebdo = ret_mc.mean().values
-        sigma_hebdo = ret_mc.cov().values
-
-        n_simulations = 1000
-        n_semaines = 52
-        np.random.seed(42)
-
-        trajectoires = np.zeros((n_simulations, n_semaines + 1))
-        trajectoires[:, 0] = budget
-
-        for sim in range(n_simulations):
-            val = budget
-            for sem in range(n_semaines):
-                rendements_sim = np.random.multivariate_normal(mu_hebdo, sigma_hebdo)
-                ret_port = np.dot(poids_mc, rendements_sim)
-                val *= (1 + ret_port)
-                trajectoires[sim, sem + 1] = val
-
-        # Percentiles
-        p5 = np.percentile(trajectoires, 5, axis=0)
-        p25 = np.percentile(trajectoires, 25, axis=0)
-        p50 = np.percentile(trajectoires, 50, axis=0)
-        p75 = np.percentile(trajectoires, 75, axis=0)
-        p95 = np.percentile(trajectoires, 95, axis=0)
-
-        semaines = list(range(n_semaines + 1))
-
-        fig_mc = go.Figure()
-        fig_mc.add_trace(go.Scatter(x=semaines, y=p95, mode="lines", name="Optimiste (95e)", line=dict(color="#00cc00", dash="dot")))
-        fig_mc.add_trace(go.Scatter(x=semaines, y=p75, mode="lines", name="Favorable (75e)", line=dict(color="#66cc66")))
-        fig_mc.add_trace(go.Scatter(x=semaines, y=p50, mode="lines", name="Médian (50e)", line=dict(color="#4a90e2", width=3)))
-        fig_mc.add_trace(go.Scatter(x=semaines, y=p25, mode="lines", name="Défavorable (25e)", line=dict(color="#cc6666")))
-        fig_mc.add_trace(go.Scatter(x=semaines, y=p5, mode="lines", name="Pessimiste (5e)", line=dict(color="#ff4b4b", dash="dot")))
-        fig_mc.add_hline(y=budget, line_dash="dash", line_color="white", annotation_text="Capital initial")
-        fig_mc.update_layout(
-            template="plotly_dark", height=500,
-            xaxis_title="Semaines", yaxis_title="Valeur du portefeuille (€)",
-            margin=dict(t=10, b=40, l=40, r=10),
-        )
-        st.plotly_chart(fig_mc, use_container_width=True)
-
-        # Statistiques clés
-        val_finales = trajectoires[:, -1]
-        proba_perte = (val_finales < budget).mean() * 100
-        proba_perte_10 = (val_finales < budget * 0.90).mean() * 100
-        gain_median = ((p50[-1] / budget) - 1) * 100
-        pire_cas = ((p5[-1] / budget) - 1) * 100
-        meilleur_cas = ((p95[-1] / budget) - 1) * 100
-
-        col_mc1, col_mc2, col_mc3, col_mc4, col_mc5 = st.columns(5)
-        col_mc1.metric("Probabilité de perte", f"{proba_perte:.1f}%",
-                       delta="ATTENTION" if proba_perte > 50 else "FAVORABLE",
-                       delta_color="inverse" if proba_perte > 50 else "normal")
-        col_mc2.metric("Prob. perte > 10%", f"{proba_perte_10:.1f}%")
-        col_mc3.metric("Scénario médian (1 an)", f"{gain_median:+.1f}%")
-        col_mc4.metric("Pire scénario (5e %)", f"{pire_cas:+.1f}%")
-        col_mc5.metric("Meilleur scénario (95e %)", f"{meilleur_cas:+.1f}%")
-
-        st.markdown("---")
-        st.markdown("#### DISTRIBUTION DES RENDEMENTS à 1 an")
-        fig_hist = px.histogram(
-            x=((val_finales / budget) - 1) * 100,
-            nbins=50,
-            labels={"x": "Rendement (%)"},
-            color_discrete_sequence=["#4a90e2"],
-        )
-        fig_hist.add_vline(x=0, line_dash="dash", line_color="white", annotation_text="Seuil 0%")
-        fig_hist.update_layout(template="plotly_dark", height=300, margin=dict(t=10, b=40, l=40, r=10), showlegend=False)
-        st.plotly_chart(fig_hist, use_container_width=True)
-
-        # Value at Risk
-        var_95 = np.percentile(val_finales - budget, 5)
-        cvar_95 = val_finales[val_finales < budget + var_95].mean() - budget if any(val_finales < budget + var_95) else var_95
-        st.markdown(f"**Value at Risk (95%) sur 1 an :** Vous avez 5% de chances de perdre plus de **{abs(var_95):.2f} €** ({abs(var_95)/budget*100:.1f}% du capital).")
-        st.markdown(f"**Conditional VaR (95%) :** Dans les 5% pires scénarios, la perte moyenne serait de **{abs(cvar_95):.2f} €**.")
-    else:
-        st.warning("Données insuffisantes pour les projections.")
-
-
-# =================================================================
-# ONGLET 6 : ASSISTANT DCA (nouveau V36)
-# =================================================================
-with tab6:
-    st.markdown("### ASSISTANT DCA — ALLOCATION DU PROCHAIN INVESTISSEMENT")
-    st.markdown("*Simulez un investissement DCA et l'assistant calcule la répartition optimale pour rééquilibrer votre portefeuille.*")
-
-    montant_dca = st.number_input("Montant à investir ce mois-ci (EUR)", min_value=10.0, value=50.0, step=10.0, key="dca_input")
-
-    if montant_dca > 0 and budget > 0 and len(actifs_portefeuille) > 0:
-        # Calculer les poids actuels vs poids cibles
-        poids_actuels = {}
-        poids_cibles = {}
-        total_futur = budget + montant_dca
-
-        for actif in actifs_portefeuille:
-            val_actuelle = dict_actuel.get(actif, 0)
-            poids_actuels[actif] = val_actuelle / budget if budget > 0 else 0
-            val_cible = allocations.get(actif, val_actuelle)
-            val_cible = float(val_cible) if pd.notna(val_cible) else val_actuelle
-            poids_cibles[actif] = val_cible / budget if budget > 0 else 0
-
-        # Calculer l'écart par rapport aux cibles
-        ecarts = {}
-        for actif in actifs_portefeuille:
-            val_actuelle = dict_actuel.get(actif, 0)
-            val_cible_future = poids_cibles.get(actif, 0) * total_futur
-            ecart = val_cible_future - val_actuelle
-            ecarts[actif] = max(0, ecart)  # On n'investit que, on ne vend pas en DCA
-
-        total_ecarts = sum(ecarts.values())
-
-        # Répartir le montant DCA proportionnellement aux écarts
-        recommandations_dca = {}
-        if total_ecarts > 0:
-            for actif, ecart in ecarts.items():
-                montant = (ecart / total_ecarts) * montant_dca
-                if montant >= FRAIS_ORDRE_TR + 1:  # Minimum rentable
-                    recommandations_dca[actif] = montant
-        
-        # Si aucune reco (tout est déjà équilibré), répartir sur les positions santé élevée
-        if not recommandations_dca and sante_positions:
-            top_sante = sorted(sante_positions, key=lambda x: x["score_sante"], reverse=True)[:3]
-            for sp in top_sante:
-                recommandations_dca[sp["actif"]] = montant_dca / len(top_sante)
-
-        if recommandations_dca:
-            # Normaliser au montant exact
-            total_reco = sum(recommandations_dca.values())
-            if total_reco > 0:
-                recommandations_dca = {k: v * montant_dca / total_reco for k, v in recommandations_dca.items()}
-
-            st.markdown(f"<p class='section-header'>PLAN D'INVESTISSEMENT — {montant_dca:.0f} EUR</p>", unsafe_allow_html=True)
-
-            lignes_dca = []
-            for actif, montant in sorted(recommandations_dca.items(), key=lambda x: x[1], reverse=True):
-                pct = (montant / montant_dca) * 100
-                frais = FRAIS_ORDRE_TR + montant * SPREAD_ESTIME_TR
-                sante_score = next((s["score_sante"] for s in sante_positions if s["actif"] == actif), 50)
-                poids_apres = ((dict_actuel.get(actif, 0) + montant) / total_futur) * 100
-                lignes_dca.append({
-                    "Instrument": univers_etudie.get(actif, {"nom": actif})["nom"],
-                    "Montant": montant,
-                    "Allocation DCA": f"{pct:.0f}%",
-                    "Frais TR": frais,
-                    "Score Sante": sante_score,
-                    "Poids apres DCA": f"{poids_apres:.1f}%",
-                })
-
-            df_dca = pd.DataFrame(lignes_dca)
-            st.dataframe(
-                df_dca.style.format({"Montant": "{:.2f} EUR", "Frais TR": "{:.2f} EUR"}),
-                use_container_width=True,
-            )
-
-            total_frais_dca = sum(FRAIS_ORDRE_TR + m * SPREAD_ESTIME_TR for m in recommandations_dca.values())
-            pct_frais = (total_frais_dca / montant_dca) * 100
-            st.caption(
-                f"Frais totaux estimés : **{total_frais_dca:.2f} EUR** ({pct_frais:.1f}% du montant). "
-                f"Nombre d'ordres : **{len(recommandations_dca)}** x {FRAIS_ORDRE_TR} EUR."
-            )
-
-            if pct_frais > 5:
-                st.warning(
-                    f"Les frais représentent {pct_frais:.1f}% du montant investi. "
-                    "Il peut être plus rentable d'attendre d'avoir un montant plus élevé "
-                    "ou de concentrer sur moins de lignes."
-                )
-        else:
-            st.info("Portefeuille déjà équilibré. Investissez sur votre position préférée.")
-
-
-# =================================================================
-# ONGLET 7 : BACKTEST WALK-FORWARD (nouveau V36)
-# =================================================================
-with tab7:
-    st.markdown("### BACKTEST WALK-FORWARD — PERFORMANCE HISTORIQUE DE LA STRATEGIE")
-    st.markdown("*Simulation de la stratégie d'allocation sur les 3 dernières années vs un DCA passif sur le S&P 500.*")
-
-    if len(actifs_portefeuille) > 0 and budget > 0:
-        # Poids du portefeuille actuel
-        actifs_bt = [a for a in actifs_portefeuille if a in rendements_hebdo.columns]
-        if len(actifs_bt) > 0:
-            poids_bt = np.array([dict_actuel.get(a, 0) for a in actifs_bt])
-            if poids_bt.sum() > 0:
-                poids_bt = poids_bt / poids_bt.sum()
-            else:
-                poids_bt = np.ones(len(actifs_bt)) / len(actifs_bt)
-
-            ret_bt = rendements_hebdo[actifs_bt].fillna(0)
-
-            # S&P 500 benchmark
-            sp500_key = "Core S&P 500" if "Core S&P 500" in rendements_hebdo.columns else None
-            if sp500_key is None:
-                # Fallback : utiliser ^GSPC
-                sp500_ticker = "^GSPC"
-                if sp500_ticker in df_brut.columns:
-                    sp500_weekly = df_brut[sp500_ticker].resample("W-FRI").last().pct_change().dropna()
-                    sp500_weekly = sp500_weekly.reindex(ret_bt.index).fillna(0)
-                else:
-                    sp500_weekly = pd.Series(0, index=ret_bt.index)
-            else:
-                sp500_weekly = ret_bt[sp500_key] if sp500_key in ret_bt.columns else pd.Series(0, index=ret_bt.index)
-
-            # Rendements du portefeuille
-            port_ret_bt = (ret_bt * poids_bt).sum(axis=1)
-
-            # Croissance cumulée
-            croissance_port = (1 + port_ret_bt).cumprod()
-            croissance_sp = (1 + sp500_weekly).cumprod()
-
-            # Métriques
-            ret_annuel_port = port_ret_bt.mean() * 52
-            vol_annuel_port = port_ret_bt.std() * np.sqrt(52)
-            sharpe_port = ret_annuel_port / vol_annuel_port if vol_annuel_port > 0 else 0
-
-            ret_annuel_sp = sp500_weekly.mean() * 52
-            vol_annuel_sp = sp500_weekly.std() * np.sqrt(52)
-            sharpe_sp = ret_annuel_sp / vol_annuel_sp if vol_annuel_sp > 0 else 0
-
-            # Max drawdown
-            peak_port = croissance_port.cummax()
-            dd_port = ((croissance_port - peak_port) / peak_port).min()
-            peak_sp = croissance_sp.cummax()
-            dd_sp = ((croissance_sp - peak_sp) / peak_sp).min()
-
-            # Calmar ratio
-            calmar_port = ret_annuel_port / abs(dd_port) if dd_port != 0 else 0
-            calmar_sp = ret_annuel_sp / abs(dd_sp) if dd_sp != 0 else 0
-
-            # Graphique
-            fig_bt = go.Figure()
-            fig_bt.add_trace(go.Scatter(
-                x=croissance_port.index, y=croissance_port.values * 100,
-                mode="lines", name="Votre Portefeuille",
-                line=dict(color="#4a90e2", width=2),
-            ))
-            fig_bt.add_trace(go.Scatter(
-                x=croissance_sp.index, y=croissance_sp.values * 100,
-                mode="lines", name="S&P 500 (Benchmark)",
-                line=dict(color="#555555", width=1.5, dash="dot"),
-            ))
-            fig_bt.add_hline(y=100, line_dash="dash", line_color="#333333")
-            fig_bt.update_layout(
-                template="plotly_dark", height=450,
-                margin=dict(t=10, b=40, l=40, r=10),
-                xaxis_title="", yaxis_title="Base 100",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
-            )
-            st.plotly_chart(fig_bt, use_container_width=True)
-
-            # Tableau de métriques comparatives
-            col_bt1, col_bt2, col_bt3, col_bt4 = st.columns(4)
-            col_bt1.metric("Rendement annualisé", f"{ret_annuel_port*100:.1f}%", delta=f"vs S&P: {ret_annuel_sp*100:.1f}%")
-            col_bt2.metric("Ratio de Sharpe", f"{sharpe_port:.2f}", delta=f"vs S&P: {sharpe_sp:.2f}")
-            col_bt3.metric("Max Drawdown", f"{dd_port*100:.1f}%", delta=f"vs S&P: {dd_sp*100:.1f}%")
-            col_bt4.metric("Ratio de Calmar", f"{calmar_port:.2f}", delta=f"vs S&P: {calmar_sp:.2f}")
-
-            # Drawdown chart
-            st.markdown("<p class='section-header'>HISTORIQUE DES DRAWDOWNS</p>", unsafe_allow_html=True)
-            dd_series_port = (croissance_port - peak_port) / peak_port * 100
-            dd_series_sp = (croissance_sp - peak_sp) / peak_sp * 100
-
-            fig_dd = go.Figure()
-            fig_dd.add_trace(go.Scatter(
-                x=dd_series_port.index, y=dd_series_port.values,
-                fill="tozeroy", name="Portefeuille",
-                line=dict(color="#4a90e2"), fillcolor="rgba(74,144,226,0.2)",
-            ))
-            fig_dd.add_trace(go.Scatter(
-                x=dd_series_sp.index, y=dd_series_sp.values,
-                fill="tozeroy", name="S&P 500",
-                line=dict(color="#555555"), fillcolor="rgba(85,85,85,0.1)",
-            ))
-            fig_dd.update_layout(
-                template="plotly_dark", height=250,
-                margin=dict(t=10, b=10, l=40, r=10),
-                yaxis_title="Drawdown (%)",
-            )
-            st.plotly_chart(fig_dd, use_container_width=True)
-        else:
-            st.warning("Données insuffisantes pour le backtest.")
-    else:
-        st.warning("Aucune position pour le backtest.")
-
-
-# =================================================================
-# ONGLET 8 : MACRO & IA (HMM + Smart Cash + Telegram)
-# =================================================================
-with tab8:
-    st.markdown("### ANALYSE MACRO — MODELE DE MARKOV CACHE (HMM)")
-
+    st.markdown("<p class='section-header'>MODELE DE MARKOV CACHE (HMM)</p>", unsafe_allow_html=True)
     if HMM_DISPONIBLE and hmm_transmat is not None:
-        col_hmm1, col_hmm2 = st.columns([1, 1.5])
-        with col_hmm1:
-            st.metric("Regime HMM actuel", hmm_regime_names.get(hmm_regime_actuel, "?"))
-            st.metric("Probabilite de Krach (1 semaine)", f"{hmm_proba_krach:.1%}")
-            st.markdown("<p class='section-header'>MATRICE DE TRANSITION</p>", unsafe_allow_html=True)
-            st.markdown("*Probabilite de passer d'un etat a l'autre la semaine prochaine.*")
-
-            # Tableau de la matrice de transition
-            labels = [hmm_regime_names.get(i, f"Etat {i}") for i in range(3)]
-            df_trans = pd.DataFrame(hmm_transmat, index=labels, columns=labels)
-            st.dataframe(df_trans.style.format("{:.1%}"), use_container_width=True)
-
-        with col_hmm2:
-            # Heatmap de la matrice de transition
-            fig_trans = go.Figure(data=go.Heatmap(
-                z=hmm_transmat,
-                x=labels, y=labels,
-                colorscale="RdYlGn_r", zmin=0, zmax=1,
-                text=np.round(hmm_transmat * 100, 1),
-                texttemplate="%{text}%",
-                textfont={"size": 14},
-            ))
-            fig_trans.update_layout(
-                template="plotly_dark", height=350,
-                margin=dict(t=10, b=10, l=10, r=10),
-                xaxis_title="Vers", yaxis_title="Depuis",
-            )
-            st.plotly_chart(fig_trans, use_container_width=True)
+        c1, c2 = st.columns([1, 1.5])
+        with c1:
+            st.metric("Regime HMM", hmm_names.get(hmm_regime, "?"))
+            st.metric("P(Krach semaine prochaine)", f"{hmm_proba_krach:.1%}")
+            labels = [hmm_names.get(i, f"E{i}") for i in range(3)]
+            st.dataframe(pd.DataFrame(hmm_transmat, index=labels, columns=labels).style.format("{:.1%}"), use_container_width=True)
+        with c2:
+            labels = [hmm_names.get(i, f"E{i}") for i in range(3)]
+            fig_t = go.Figure(data=go.Heatmap(z=hmm_transmat, x=labels, y=labels, colorscale="RdYlGn_r", zmin=0, zmax=1, text=np.round(hmm_transmat*100, 1), texttemplate="%{text}%", textfont={"size": 14}))
+            fig_t.update_layout(template="plotly_dark", height=350, margin=dict(t=10,b=10,l=10,r=10), xaxis_title="Vers", yaxis_title="Depuis")
+            st.plotly_chart(fig_t, use_container_width=True)
     else:
-        st.warning("Module HMM inactif. Installez `hmmlearn` dans requirements.txt : `pip install hmmlearn`")
+        st.warning("HMM inactif. Ajoutez hmmlearn dans requirements.txt.")
 
     st.markdown("---")
-
-    # MODULE 4 : Smart Cash
-    st.markdown("<p class='section-header'>SMART CASH — OPTIMISATION DES LIQUIDITES</p>", unsafe_allow_html=True)
-    if reserve_cash > 0:
+    st.markdown("<p class='section-header'>SMART CASH</p>", unsafe_allow_html=True)
+    if cash_tr > 0:
         try:
             xeon = yf.download(TICKER_MONETAIRE, period="1y", progress=False)["Close"]
             if not xeon.empty and len(xeon) > 20:
-                xeon_clean = xeon.values.flatten() if xeon.ndim > 1 else xeon.values
-                rdt_xeon_brut = float((xeon_clean[-1] / xeon_clean[-252] - 1)) if len(xeon_clean) >= 252 else float((xeon_clean[-1] / xeon_clean[0] - 1))
-                rdt_xeon_net = rdt_xeon_brut * (1 - FLAT_TAX_FR)
-                col_sc1, col_sc2, col_sc3 = st.columns(3)
-                col_sc1.metric("Cash non investi", f"{reserve_cash:.2f} EUR")
-                col_sc2.metric(f"Rdt {TICKER_MONETAIRE} net", f"{rdt_xeon_net*100:.2f}%", delta=f"Brut: {rdt_xeon_brut*100:.2f}%")
-                col_sc3.metric("Rdt Cash TR net", f"{TAUX_CASH_TR_NET*100:.2f}%", delta=f"Brut: {TAUX_CASH_TR_BRUT*100:.2f}%")
-                if reserve_cash >= 500:
-                    if rdt_xeon_net > TAUX_CASH_TR_NET:
-                        st.success(f"RECOMMANDATION : Placer {reserve_cash:.0f} EUR sur {TICKER_MONETAIRE} (rendement net superieur de {(rdt_xeon_net-TAUX_CASH_TR_NET)*100:.2f}% vs cash TR)")
+                xv = xeon.values.flatten() if xeon.ndim > 1 else xeon.values
+                rdt_brut = float(xv[-1]/xv[0]-1) if len(xv) > 20 else 0
+                rdt_net = rdt_brut * (1 - FLAT_TAX_FR)
+                sc1, sc2, sc3 = st.columns(3)
+                sc1.metric("Cash TR", f"{cash_tr:.2f} EUR")
+                sc2.metric(f"{TICKER_MONETAIRE} net", f"{rdt_net*100:.2f}%")
+                sc3.metric("Cash TR net", f"{TAUX_CASH_TR_NET*100:.2f}%")
+                if cash_tr >= 500:
+                    if rdt_net > TAUX_CASH_TR_NET:
+                        st.success(f"Placer {cash_tr:.0f} EUR sur {TICKER_MONETAIRE} (rendement superieur de {(rdt_net-TAUX_CASH_TR_NET)*100:.2f}%)")
                     else:
-                        st.info(f"Le cash TR a {TAUX_CASH_TR_BRUT*100:.1f}% brut est actuellement plus avantageux que {TICKER_MONETAIRE}. Gardez vos liquidites sur TR.")
+                        st.info("Cash TR plus avantageux. Gardez vos liquidites.")
                 else:
-                    st.info(f"Avec {reserve_cash:.0f} EUR de liquidites, le maintien sur cash TR est optimal (frais d'ordre non rentables).")
-            else:
-                st.info("Donnees XEON indisponibles.")
-        except Exception as e:
-            logger.warning(f"Smart Cash echoue : {e}")
-            st.info("Analyse Smart Cash indisponible.")
+                    st.info(f"Avec {cash_tr:.0f} EUR, les frais d'ordre rendent le placement non rentable.")
+        except: st.info("Donnees XEON indisponibles.")
     else:
         st.info("Aucune liquidite a optimiser.")
 
     st.markdown("---")
-
-    # MODULE 4b : Telegram Sentinel Bot
-    st.markdown("<p class='section-header'>SENTINEL BOT — ALERTES TELEGRAM</p>", unsafe_allow_html=True)
-    col_tg1, col_tg2 = st.columns(2)
-    tg_token = col_tg1.text_input("Telegram Bot Token", type="password", key="tg_token")
-    tg_chat_id = col_tg2.text_input("Chat ID", key="tg_chat")
-    if st.button("POUSSER L'ALERTE", use_container_width=False, key="tg_send"):
-        if tg_token and tg_chat_id:
-            resume = (
-                f"[TERMINAL QUANT V36]\n"
-                f"Regime: {regime_marche}\n"
-                f"Score Risque: {risk_score}/100\n"
-                f"VIX: {vix_actuel:.1f}\n"
-                f"HMM P(Krach): {hmm_proba_krach:.0%}\n"
-                f"Capital: {budget:.0f} EUR\n"
-                f"Liquidites: {reserve_cash:.0f} EUR"
-            )
+    st.markdown("<p class='section-header'>SENTINEL — TELEGRAM</p>", unsafe_allow_html=True)
+    ct1, ct2 = st.columns(2)
+    tg_tok = ct1.text_input("Bot Token", type="password", key="tg1")
+    tg_cid = ct2.text_input("Chat ID", key="tg2")
+    if st.button("POUSSER ALERTE", key="tg3"):
+        if tg_tok and tg_cid:
+            msg = f"[TERMINAL V37]\nRegime: {regime}\nRisque: {risk_score}/100\nVIX: {vix:.1f}\nHMM: {hmm_proba_krach:.0%}\nCapital: {budget:.0f}EUR"
+            if swap_recommande: msg += f"\nSWAP: {swap_vente} -> {swap_achat}"
             try:
-                url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-                resp = requests.get(url, params={"chat_id": tg_chat_id, "text": resume}, timeout=10)
-                if resp.status_code == 200:
-                    st.success("Alerte envoyee sur Telegram.")
-                else:
-                    st.error(f"Erreur Telegram : {resp.status_code}")
-            except Exception as e:
-                st.error(f"Connexion Telegram echouee : {e}")
-        else:
-            st.warning("Renseignez le Bot Token et Chat ID.")
+                r = requests.get(f"https://api.telegram.org/bot{tg_tok}/sendMessage", params={"chat_id": tg_cid, "text": msg}, timeout=10)
+                st.success("Envoye.") if r.status_code == 200 else st.error(f"Erreur {r.status_code}")
+            except Exception as e: st.error(f"Echec: {e}")
+        else: st.warning("Token et Chat ID requis.")
 
-
-# =================================================================
-# ONGLET 9 : ANALYSE PCA
-# =================================================================
-with tab9:
-    col_pca1, col_pca2 = st.columns([1, 1.5])
-    with col_pca1:
-        st.markdown("**Analyse en Composantes Principales (PCA)**")
-        st.write("Identification des forces invisibles dirigeant le portefeuille.")
-        st.metric("Facteur Fantôme 1 (Risque Global)", f"{pca_explained_variance[0]:.1f}% de variance expliquée")
-        if len(pca_explained_variance) > 1:
-            st.metric("Facteur Fantôme 2 (Secteur/Style)", f"{pca_explained_variance[1]:.1f}% de variance expliquée")
-    with col_pca2:
-        st.markdown("**Exposition Bêta Macroéconomique**")
-        if len(allocations) > 0:
-            tickers_alloc = [
-                univers_etudie[a]["ticker"] for a in allocations.index
-                if a in univers_etudie and univers_etudie[a]["ticker"] in df_brut.columns
-            ]
-            poids_alloc = np.array([
-                float(allocations[a]) / budget if pd.notna(allocations[a]) else 0.0
-                for a in allocations.index
-                if a in univers_etudie and univers_etudie[a]["ticker"] in df_brut.columns
-            ])
-            if len(tickers_alloc) > 0 and poids_alloc.sum() > 0:
-                ret_port = (df_brut[tickers_alloc].pct_change().dropna() * poids_alloc).sum(axis=1)
-                df_beta = pd.DataFrame({
-                    "Port": ret_port,
-                    "S&P500": df_brut["^GSPC"].pct_change(),
-                    "Taux US": df_brut["IEF"].pct_change(),
-                    "Or": df_brut["GLD"].pct_change(),
-                }).dropna()
-                if len(df_beta) > 10:
-                    betas = []
-                    for f in ["S&P500", "Taux US", "Or"]:
-                        var_f = df_beta[f].var()
-                        betas.append(df_beta["Port"].cov(df_beta[f]) / var_f if var_f > 0 else 0)
-                    fig_beta = px.bar(
-                        pd.DataFrame({
-                            "Facteur Macro": ["Actions Mondiales", "Taux d'Intérêt US", "Or / Inflation"],
-                            "Bêta": betas,
-                        }),
-                        x="Bêta", y="Facteur Macro", orientation="h",
-                        color="Bêta", color_continuous_scale="RdBu", range_color=[-1, 1],
-                    )
-                    fig_beta.update_layout(template="plotly_dark", margin=dict(t=0, b=0, l=0, r=0))
-                    st.plotly_chart(fig_beta, use_container_width=True)
-
-
-# =================================================================
-# ONGLET 9 : STRESS-TESTS
-# =================================================================
-with tab10:
-    if len(allocations) > 0:
-        poids_test = (pd.Series(allocations) / budget).fillna(0)
-        actifs_testes = poids_test[poids_test > 0].index.tolist()
-
-        def run_stress_test(df_period, actifs, poids):
-            actifs_valides = [
-                a for a in actifs
-                if a in univers_etudie
-                and univers_etudie[a]["ticker"] in df_period.columns
-                and df_period[univers_etudie[a]["ticker"]].isna().sum() < 5
-            ]
-            poids_v = poids.reindex(actifs_valides).dropna()
-            if len(actifs_valides) == 0 or poids_v.sum() == 0:
-                return None, None, []
-            poids_r = poids_v / poids_v.sum()
-            tickers_v = [univers_etudie[a]["ticker"] for a in actifs_valides]
-            ret = df_period[tickers_v + ["^GSPC"]].pct_change().dropna()
-            port_ret = (ret[tickers_v] * poids_r.values).sum(axis=1)
-            sp_ret = ret["^GSPC"]
-            crois_p = (1 + port_ret).cumprod() * 100
-            crois_sp = (1 + sp_ret).cumprod() * 100
-            df_g = pd.DataFrame({"Ton Portefeuille (Moteur IA)": crois_p, "Indice S&P 500": crois_sp})
-            perte = crois_p.min() - 100
-            exclus = [a for a in actifs if a not in actifs_valides]
-            return df_g, perte, exclus
-
-        if len(actifs_testes) > 0:
-            col_st1, col_st2 = st.columns(2)
-
-            with col_st1:
-                st.markdown("**SCÉNARIO A : Krach COVID-19 (Fév-Avr 2020)**")
-                g_covid, p_covid, e_covid = run_stress_test(
-                    df_brut.loc["2020-02-15":"2020-04-30"], actifs_testes, poids_test
-                )
-                if g_covid is not None:
-                    fig = px.line(g_covid, color_discrete_sequence=["#4a90e2", "#444444"])
-                    fig.update_layout(template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), xaxis_title="", yaxis_title="Base 100")
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.caption(f"Pire perte : **{p_covid:.1f}%**")
-                    if e_covid:
-                        st.warning(f"Actifs exclus (données manquantes) : {', '.join(e_covid)}")
-                else:
-                    st.warning("Données insuffisantes pour 2020.")
-
-            with col_st2:
-                st.markdown("**SCÉNARIO B : Choc des Taux (Jan-Oct 2022)**")
-                g_inf, p_inf, e_inf = run_stress_test(
-                    df_brut.loc["2022-01-01":"2022-10-31"], actifs_testes, poids_test
-                )
-                if g_inf is not None:
-                    fig = px.line(g_inf, color_discrete_sequence=["#4a90e2", "#444444"])
-                    fig.update_layout(template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), xaxis_title="", yaxis_title="")
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.caption(f"Pire perte : **{p_inf:.1f}%**")
-                    if e_inf:
-                        st.warning(f"Actifs exclus (données manquantes) : {', '.join(e_inf)}")
-                else:
-                    st.warning("Données insuffisantes pour 2022.")
-
-
-# --- Footer ---
+# Footer
 st.markdown("---")
-st.caption(
-    f"Terminal Quantitatif V36 (Mode DCA · Trade Republic) — "
-    f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} — "
-    f"Taux FX : 1 EUR = {1/taux_fx.get('USD', 1):.4f} USD, "
-    f"1 EUR = {1/taux_fx.get('GBP', 1):.4f} GBP — "
-    f"Frais TR : {FRAIS_ORDRE_TR}€/ordre"
-)
+st.caption(f"Terminal V37 — Mode Forteresse — {datetime.now().strftime('%d/%m/%Y %H:%M')} — FX: 1EUR={1/taux_fx.get('USD',1):.4f}USD — Hurdle Rate: {HURDLE_RATE}")
