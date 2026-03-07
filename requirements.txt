@@ -10,3 +10,4 @@ scipy
 scikit-learn
 vaderSentiment
 hmmlearn
+st-gsheets-connection
