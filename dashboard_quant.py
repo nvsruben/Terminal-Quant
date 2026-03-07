@@ -23,10 +23,17 @@ try:
 except ImportError:
     pass
 
+GSHEETS_DISPONIBLE = False
+try:
+    from streamlit_gsheets import GSheetsConnection
+    GSHEETS_DISPONIBLE = True
+except ImportError:
+    pass
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="TERMINAL QUANTITATIF V37", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="TERMINAL QUANTITATIF V38", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
 # CSS PROFESSIONNEL
@@ -70,7 +77,7 @@ if "authentifie" not in st.session_state:
     st.session_state.authentifie = False
 if not st.session_state.authentifie:
     st.markdown("<h1 style='text-align:center;color:#fff;font-family:JetBrains Mono,monospace;letter-spacing:0.1em;font-weight:300;'>BUREAU D'ALLOCATION QUANTITATIVE</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center;color:#6c7293;font-family:JetBrains Mono,monospace;font-size:0.75rem;letter-spacing:0.15em;'>V37 &mdash; MODE FORTERESSE &mdash; SYSTEME CLOS</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center;color:#6c7293;font-family:JetBrains Mono,monospace;font-size:0.75rem;letter-spacing:0.15em;'>V38 &mdash; MODE FORTERESSE &mdash; SYSTEME CLOS</p>", unsafe_allow_html=True)
     _, c, _ = st.columns([1, 1, 1])
     with c:
         mdp = st.text_input("Cle d'Acces", type="password")
@@ -182,7 +189,13 @@ def telecharger_donnees(liste_tickers):
 def obtenir_fondamentaux(ticker_str):
     try:
         info = yf.Ticker(ticker_str).info
-        return {"trailingPE": info.get("trailingPE"), "returnOnEquity": info.get("returnOnEquity"), "recommendationMean": info.get("recommendationMean")}
+        return {
+            "trailingPE": info.get("trailingPE"),
+            "returnOnEquity": info.get("returnOnEquity"),
+            "recommendationMean": info.get("recommendationMean"),
+            "dividendYield": info.get("dividendYield"),
+            "debtToEquity": info.get("debtToEquity"),
+        }
     except Exception as e:
         logger.debug(f"Fondamentaux indisponibles: {ticker_str}: {e}")
         return {}
@@ -205,15 +218,42 @@ def calculate_z_score(s):
     return (s - s.mean()) / std if std > 0 and not pd.isna(std) else pd.Series(0, index=s.index)
 
 # ==========================================
-# PORTEFEUILLE — SYSTEME CLOS
+# PORTEFEUILLE — SYSTEME CLOS (donnees reelles)
 # ==========================================
+PORTEFEUILLE_PAR_DEFAUT = pd.DataFrame({
+    "Actif": ["Core S&P 500", "Bitcoin", "Or Physique", "Palantir", "Argent Physique", "Uranium USD", "Rheinmetall"],
+    "Quantite": [0.636786, 0.004848, 1.359804, 0.421737, 0.634016, 0.418330, 0.006029],
+    "PRU / Part": [631.33, 61441.93, 74.28, 168.35, 78.86, 28.69, 1990.38],
+    "Coeur": [True, True, True, False, False, False, False],
+})
+
+def charger_portefeuille():
+    """Tente de charger depuis GSheets, sinon fallback sur les donnees en dur."""
+    if GSHEETS_DISPONIBLE:
+        try:
+            conn = st.connection("gsheets", type=GSheetsConnection)
+            df_gs = conn.read(worksheet="Portefeuille", ttl=60)
+            if df_gs is not None and not df_gs.empty and "Actif" in df_gs.columns:
+                logger.info("Portefeuille charge depuis Google Sheets")
+                return df_gs
+        except Exception as e:
+            logger.info(f"GSheets indisponible, fallback local — {e}")
+    return PORTEFEUILLE_PAR_DEFAUT.copy()
+
+def sauvegarder_portefeuille(df):
+    """Tente de sauvegarder vers GSheets."""
+    if GSHEETS_DISPONIBLE:
+        try:
+            conn = st.connection("gsheets", type=GSheetsConnection)
+            conn.update(worksheet="Portefeuille", data=df)
+            logger.info("Portefeuille sauvegarde sur Google Sheets")
+            return True
+        except Exception as e:
+            logger.debug(f"Sauvegarde GSheets echouee — {e}")
+    return False
+
 if "mon_portefeuille" not in st.session_state or "Valeur (EUR)" in getattr(st.session_state.get("mon_portefeuille", pd.DataFrame()), "columns", []):
-    st.session_state.mon_portefeuille = pd.DataFrame({
-        "Actif": ["Core S&P 500", "Bitcoin", "Or Physique", "Palantir", "Argent Physique", "Uranium USD", "Rheinmetall"],
-        "Quantite": [0.72, 0.0035, 4.5, 0.65, 1.8, 0.55, 0.015],
-        "PRU / Part": [557.0, 84285.0, 22.4, 84.6, 27.8, 19.6, 633.0],
-        "Coeur": [True, True, True, False, False, False, False],
-    })
+    st.session_state.mon_portefeuille = charger_portefeuille()
 
 # ==========================================
 # SIDEBAR
@@ -370,28 +410,39 @@ for c in top_candidats:
     p_brut = float(df_brut[t].iloc[-1])
     sma200 = float(df_brut[t].tail(200).mean())
     trend = (p_brut / sma200 - 1) if sma200 > 0 else 0
-    pe, roe, cons = 15.0, 0.15, 3.0
+    pe, roe, cons, div_yield, dte = 15.0, 0.15, 3.0, 0.0, 50.0
     is_etf = est_etf_ou_crypto(univers_etudie[c]["nom"])
     if not is_etf:
         f = obtenir_fondamentaux(t)
         pe_r, roe_r, cons_r = f.get("trailingPE"), f.get("returnOnEquity"), f.get("recommendationMean")
-        # FORTERESSE: rejeter PE negatif ou ROE negatif
+        div_r = f.get("dividendYield")
+        dte_r = f.get("debtToEquity")
+        # FORTERESSE: rejeter PE negatif, ROE negatif, ou surendettement extreme
         if pe_r is not None and pe_r < 0: continue
         if roe_r is not None and roe_r < 0: continue
+        if dte_r is not None and dte_r > 300: continue  # Dette > 300% = exclusion
         if pe_r is not None and 0 < pe_r < 100: pe = pe_r
         elif pe_r is not None and pe_r > 100: continue
         if roe_r is not None: roe = roe_r
         if cons_r is not None: cons = cons_r
-    fund_data.append({"Actif": c, "P/E": pe, "ROE": roe, "Consensus": cons, "Sortino": sortino.get(c, 0), "Tendance": trend})
+        if div_r is not None and div_r > 0: div_yield = div_r
+        if dte_r is not None and dte_r >= 0: dte = dte_r
+    fund_data.append({
+        "Actif": c, "P/E": pe, "ROE": roe, "Consensus": cons,
+        "Sortino": sortino.get(c, 0), "Tendance": trend,
+        "Div Yield": div_yield, "Dette/CP": dte,
+    })
 
 df_z = pd.DataFrame(fund_data)
 if not df_z.empty:
     df_z["Score_Global"] = (
         -calculate_z_score(df_z["P/E"]).fillna(0)
-        + calculate_z_score(df_z["ROE"]).fillna(0) * 1.5  # Surponderer la qualite
+        + calculate_z_score(df_z["ROE"]).fillna(0) * 1.5
         + calculate_z_score(df_z["Sortino"]).fillna(0)
         - calculate_z_score(df_z["Consensus"]).fillna(0)
         + calculate_z_score(df_z["Tendance"]).fillna(0)
+        + calculate_z_score(df_z["Div Yield"]).fillna(0) * 0.8  # Bonus dividende
+        - calculate_z_score(df_z["Dette/CP"]).fillna(0) * 1.2   # Malus dette
     )
     top_ranked = df_z.sort_values("Score_Global", ascending=False)["Actif"].tolist()
 else:
@@ -540,7 +591,10 @@ with tab1:
     df_cl["Quantite"] = pd.to_numeric(df_cl["Quantite"], errors="coerce").clip(lower=0).fillna(0)
     df_cl["PRU / Part"] = pd.to_numeric(df_cl["PRU / Part"], errors="coerce").clip(lower=0).fillna(0)
     if "Coeur" not in df_cl.columns: df_cl["Coeur"] = False
-    st.session_state.mon_portefeuille = df_cl[["Actif", "Quantite", "PRU / Part", "Coeur"]].reset_index(drop=True)
+    df_save = df_cl[["Actif", "Quantite", "PRU / Part", "Coeur"]].reset_index(drop=True)
+    st.session_state.mon_portefeuille = df_save
+    # Persistence GSheets
+    sauvegarder_portefeuille(df_save)
 
     total_pnl = sum(dict_actuel.get(a, 0) - dict_pru.get(a, 0) for a in dict_actuel)
     pc = "#00c853" if total_pnl >= 0 else "#ff1744"
@@ -577,12 +631,19 @@ with tab2:
             a = r["Actif"]
             en_ptf = "OUI" if a in actifs_portefeuille else ""
             coeur = "COEUR" if a in actifs_verrouilles else ""
+            div_pct = r.get("Div Yield", 0) * 100 if r.get("Div Yield", 0) > 0 else 0
+            dte_val = r.get("Dette/CP", 0)
+            dte_str = f"{dte_val:.0f}%" if dte_val > 0 else "N/A"
             tab_data.append({
                 "Instrument": f"{univers_etudie[a]['nom']} [{univers_etudie[a]['ticker']}]",
                 "Z-Score": round(r["Score_Global"], 2),
-                "P/E": round(r["P/E"], 1), "ROE": f"{r['ROE']*100:.1f}%",
+                "P/E": round(r["P/E"], 1),
+                "ROE": f"{r['ROE']*100:.1f}%",
+                "Div %": f"{div_pct:.2f}%" if div_pct > 0 else "-",
+                "Dette/CP": dte_str,
                 "Sortino": round(r["Sortino"], 2),
-                "En portefeuille": en_ptf, "Statut": coeur,
+                "Ptf": en_ptf,
+                "Statut": coeur,
             })
         st.dataframe(pd.DataFrame(tab_data), use_container_width=True, height=500)
     else:
@@ -682,7 +743,7 @@ with tab4:
     tg_cid = ct2.text_input("Chat ID", key="tg2")
     if st.button("POUSSER ALERTE", key="tg3"):
         if tg_tok and tg_cid:
-            msg = f"[TERMINAL V37]\nRegime: {regime}\nRisque: {risk_score}/100\nVIX: {vix:.1f}\nHMM: {hmm_proba_krach:.0%}\nCapital: {budget:.0f}EUR"
+            msg = f"[TERMINAL V38]\nRegime: {regime}\nRisque: {risk_score}/100\nVIX: {vix:.1f}\nHMM: {hmm_proba_krach:.0%}\nCapital: {budget:.0f}EUR"
             if swap_recommande: msg += f"\nSWAP: {swap_vente} -> {swap_achat}"
             try:
                 r = requests.get(f"https://api.telegram.org/bot{tg_tok}/sendMessage", params={"chat_id": tg_cid, "text": msg}, timeout=10)
@@ -692,4 +753,5 @@ with tab4:
 
 # Footer
 st.markdown("---")
-st.caption(f"Terminal V37 — Mode Forteresse — {datetime.now().strftime('%d/%m/%Y %H:%M')} — FX: 1EUR={1/taux_fx.get('USD',1):.4f}USD — Hurdle Rate: {HURDLE_RATE}")
+gs_status = "GSheets: ON" if GSHEETS_DISPONIBLE else "GSheets: OFF (local)"
+st.caption(f"Terminal V38 — Mode Forteresse — {datetime.now().strftime('%d/%m/%Y %H:%M')} — FX: 1EUR={1/taux_fx.get('USD',1):.4f}USD — Hurdle: {HURDLE_RATE} — {gs_status}")
